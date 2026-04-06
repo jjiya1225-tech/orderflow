@@ -543,31 +543,44 @@ elif page == "📋 발주 목록":
         header = f"{oid}  ·  **{o.get('supplier', '')}**  ·  {fmt_amount(o.get('total_amount'), o.get('currency'))}  ·  {status}"
 
         with st.expander(header):
-            st.caption(
-                f"발주일: {o.get('order_date', '-')}  |  "
-                f"입고예정: {o.get('eta') or '-'}  |  "
-                f"{total_qty:,}개 · {len(items)}종  |  "
-                f"파일: {o.get('source_file', '-')}"
+
+            # ── 기본 정보 수정 ──
+            st.markdown("**기본 정보**")
+            bc1, bc2, bc3, bc4 = st.columns(4)
+            with bc1:
+                edit_supplier = st.text_input(
+                    "거래처", value=o.get("supplier", ""), key=f"sup_{oid}",
+                )
+            with bc2:
+                od = parse_date(o.get("order_date"))
+                edit_od = st.date_input(
+                    "발주일", value=od or datetime.now().date(), key=f"od_{oid}",
+                )
+            with bc3:
+                eta = parse_date(o.get("eta"))
+                edit_eta = st.date_input(
+                    "입고예정일", value=eta or None, key=f"eta_{oid}",
+                )
+            with bc4:
+                statuses = ["확인 대기", "확인 완료", "배송 중", "입고 완료"]
+                edit_status = st.selectbox(
+                    "상태", statuses,
+                    index=statuses.index(status) if status in statuses else 0,
+                    key=f"st_{oid}",
+                )
+
+            edit_notes = st.text_input(
+                "발주 메모", value=o.get("notes") or "", key=f"notes_{oid}",
+                placeholder="이 발주 건에 대한 메모",
             )
 
-            # 상태 변경
-            new_status = st.selectbox(
-                "상태 변경",
-                ["확인 대기", "확인 완료", "배송 중", "입고 완료"],
-                index=["확인 대기", "확인 완료", "배송 중", "입고 완료"].index(status)
-                if status in ["확인 대기", "확인 완료", "배송 중", "입고 완료"] else 0,
-                key=f"st_{oid}",
-            )
-            if new_status != status:
-                if st.button("상태 저장", key=f"save_{oid}"):
-                    update_order_status(oid, new_status)
-                    st.rerun()
+            st.caption(f"📎 {o.get('source_file', '-')}  |  {total_qty:,}개 · {len(items)}종")
 
             st.markdown("---")
 
-            # 품목 테이블 (내부명, 메모 수정 가능)
+            # ── 품목 테이블 (전체 수정 가능) ──
             if items:
-                st.markdown("**품목 상세** — 내부명과 메모를 수정할 수 있습니다")
+                st.markdown("**품목 상세**")
 
                 items_data = []
                 for it in items:
@@ -585,7 +598,6 @@ elif page == "📋 발주 목록":
                     pd.DataFrame(items_data),
                     use_container_width=True,
                     hide_index=True,
-                    disabled=["원본명", "색상", "수량", "단가", "소계"],
                     column_config={
                         "원본명": st.column_config.TextColumn("원본명", width="medium"),
                         "색상": st.column_config.TextColumn("색상", width="small"),
@@ -598,32 +610,42 @@ elif page == "📋 발주 목록":
                     key=f"edit_{oid}",
                 )
 
-                if st.button("품목 정보 저장", key=f"items_save_{oid}"):
+            st.markdown("---")
+
+            # ── 저장 / 삭제 버튼 ──
+            save_col, del_col = st.columns([3, 1])
+            with save_col:
+                if st.button("💾 저장", key=f"save_all_{oid}", type="primary", use_container_width=True):
+                    # 품목 데이터 수집
                     new_items = []
-                    for i, row in edited.iterrows():
-                        original = items[i] if i < len(items) else {}
-                        new_items.append({
-                            "name": row["원본명"],
-                            "color": row["색상"] if row["색상"] else "",
-                            "display_name": row["내부명"] if row["내부명"] else "",
-                            "quantity": original.get("quantity", row["수량"]),
-                            "unit_price": original.get("unit_price", row["단가"]),
-                            "subtotal": original.get("subtotal", row["소계"]),
-                            "memo": row["메모"] if row["메모"] else "",
-                        })
+                    if items:
+                        for i, row in edited.iterrows():
+                            new_items.append({
+                                "name": row["원본명"],
+                                "color": row["색상"] if row["색상"] else "",
+                                "display_name": row["내부명"] if row["내부명"] else "",
+                                "quantity": row["수량"],
+                                "unit_price": row["단가"],
+                                "subtotal": row["소계"],
+                                "memo": row["메모"] if row["메모"] else "",
+                            })
+                    # 전체 주문 업데이트
                     o_copy = dict(o)
-                    o_copy["items"] = new_items
+                    o_copy["supplier"] = edit_supplier
+                    o_copy["order_date"] = edit_od.strftime("%Y-%m-%d")
+                    o_copy["eta"] = edit_eta.strftime("%Y-%m-%d") if edit_eta else None
+                    o_copy["status"] = edit_status
+                    o_copy["notes"] = edit_notes if edit_notes else None
+                    o_copy["items"] = new_items if new_items else items
+                    o_copy["total_amount"] = sum(it.get("subtotal", 0) for it in o_copy["items"])
                     update_order(oid, o_copy)
                     st.success("저장 완료!")
                     st.rerun()
 
-            if o.get("notes"):
-                st.info(f"📝 {o['notes']}")
-
-            st.markdown("---")
-            if st.button("🗑️ 삭제", key=f"del_{oid}"):
-                delete_order(oid)
-                st.rerun()
+            with del_col:
+                if st.button("🗑️ 삭제", key=f"del_{oid}", use_container_width=True):
+                    delete_order(oid)
+                    st.rerun()
 
     # 엑셀 다운로드
     st.markdown("---")
