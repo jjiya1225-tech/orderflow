@@ -119,6 +119,24 @@ def fmt_amount(amt, cur="KRW"):
     return f"{sym}{amt:,.0f}"
 
 
+def parse_date(s):
+    """다양한 날짜 문자열을 date 객체로 변환"""
+    if not s:
+        return None
+    if isinstance(s, datetime):
+        return s.date()
+    from datetime import date as _date
+    if isinstance(s, _date):
+        return s
+    s = str(s).strip().replace("/", "-").replace(".", "-")
+    for fmt in ("%Y-%m-%d", "%Y%m%d", "%Y-%m-%d %H:%M:%S"):
+        try:
+            return datetime.strptime(s, fmt).date()
+        except ValueError:
+            continue
+    return None
+
+
 # ════════════════════════════════════════════
 # 사이드바
 # ════════════════════════════════════════════
@@ -235,13 +253,15 @@ if page == "📊 대시보드":
                         label = f"🔵  {month}/{day} — {o.get('supplier', '')}"
 
                     with st.expander(label, expanded=is_past):
-                        # 품목 + 수량 테이블
+                        # 품목 + 색상 + 수량 테이블
                         rows = []
                         for it in items:
                             display = it.get("display_name") or ""
                             name = it.get("name", "")
-                            # 내부명이 있으면 내부명 표시, 없으면 원본명
                             show_name = display if display else name
+                            color = it.get("color") or ""
+                            if color:
+                                show_name = f"{show_name} ({color})"
                             rows.append({
                                 "품목": show_name,
                                 "수량": it.get("quantity", 0),
@@ -281,6 +301,9 @@ if page == "📊 대시보드":
                     display = it.get("display_name") or ""
                     name = it.get("name", "")
                     show_name = display if display else name
+                    color = it.get("color") or ""
+                    if color:
+                        show_name = f"{show_name} ({color})"
                     memo = it.get("memo", "")
                     rows.append({
                         "품목": show_name,
@@ -355,9 +378,13 @@ elif page == "⬆️ 발주서 업로드":
             with col1:
                 parsed["supplier"] = st.text_input("거래처", value=parsed.get("supplier", ""))
             with col2:
-                parsed["order_date"] = st.text_input("발주일", value=parsed.get("order_date", ""))
+                od = parse_date(parsed.get("order_date"))
+                selected_od = st.date_input("발주일", value=od or datetime.now().date())
+                parsed["order_date"] = selected_od.strftime("%Y-%m-%d")
             with col3:
-                parsed["eta"] = st.text_input("입고예정일", value=parsed.get("eta") or "")
+                eta = parse_date(parsed.get("eta"))
+                selected_eta = st.date_input("입고예정일", value=eta or None)
+                parsed["eta"] = selected_eta.strftime("%Y-%m-%d") if selected_eta else None
             with col4:
                 currencies = ["KRW", "CNY", "USD", "JPY"]
                 cur_val = parsed.get("currency", "KRW")
@@ -374,8 +401,9 @@ elif page == "⬆️ 발주서 업로드":
             updated_items = []
 
             for idx, item in enumerate(items):
-                with st.expander(f"#{idx + 1}  {item.get('name', '')}", expanded=True):
-                    c1, c2 = st.columns(2)
+                color_label = f" ({item.get('color')})" if item.get("color") else ""
+                with st.expander(f"#{idx + 1}  {item.get('name', '')}{color_label}", expanded=True):
+                    c1, c2, c_color = st.columns([2, 2, 1])
                     with c1:
                         original_name = st.text_input(
                             "원본 제품명",
@@ -389,6 +417,13 @@ elif page == "⬆️ 발주서 업로드":
                             value=item.get("display_name") or item.get("name", ""),
                             key=f"display_{idx}",
                             help="팀원들이 알아볼 수 있는 이름으로 수정하세요",
+                        )
+                    with c_color:
+                        color = st.text_input(
+                            "색상",
+                            value=item.get("color") or "",
+                            key=f"color_{idx}",
+                            placeholder="예: 흑색, 3000K",
                         )
 
                     c3, c4, c5 = st.columns(3)
@@ -418,6 +453,7 @@ elif page == "⬆️ 발주서 업로드":
                     updated_items.append({
                         "name": original_name,
                         "display_name": display_name if display_name != original_name else "",
+                        "color": color,
                         "quantity": qty,
                         "unit_price": price,
                         "subtotal": subtotal,
@@ -537,6 +573,7 @@ elif page == "📋 발주 목록":
                 for it in items:
                     items_data.append({
                         "원본명": it.get("name", ""),
+                        "색상": it.get("color") or "",
                         "내부명": it.get("display_name") or "",
                         "수량": it.get("quantity", 0),
                         "단가": it.get("unit_price", 0),
@@ -548,9 +585,10 @@ elif page == "📋 발주 목록":
                     pd.DataFrame(items_data),
                     use_container_width=True,
                     hide_index=True,
-                    disabled=["원본명", "수량", "단가", "소계"],
+                    disabled=["원본명", "색상", "수량", "단가", "소계"],
                     column_config={
                         "원본명": st.column_config.TextColumn("원본명", width="medium"),
+                        "색상": st.column_config.TextColumn("색상", width="small"),
                         "내부명": st.column_config.TextColumn("내부명", width="medium", help="팀원들이 알아볼 수 있는 이름"),
                         "수량": st.column_config.NumberColumn("수량", format="%.0f"),
                         "단가": st.column_config.NumberColumn("단가", format="%.2f"),
@@ -566,6 +604,7 @@ elif page == "📋 발주 목록":
                         original = items[i] if i < len(items) else {}
                         new_items.append({
                             "name": row["원본명"],
+                            "color": row["색상"] if row["색상"] else "",
                             "display_name": row["내부명"] if row["내부명"] else "",
                             "quantity": original.get("quantity", row["수량"]),
                             "unit_price": original.get("unit_price", row["단가"]),
@@ -605,6 +644,7 @@ elif page == "📋 발주 목록":
                 all_items_data.append({
                     "발주번호": o["id"],
                     "원본명": i.get("name"),
+                    "색상": i.get("color") or "",
                     "내부명": i.get("display_name") or "",
                     "수량": i.get("quantity"),
                     "단가": i.get("unit_price"),
