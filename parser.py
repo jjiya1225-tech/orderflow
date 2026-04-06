@@ -20,7 +20,7 @@ PARSE_PROMPT = """당신은 발주서/주문서 파싱 전문가입니다.
   "eta": "YYYY-MM-DD (입고예정일, 없으면 null)",
   "currency": "KRW, CNY, USD 등",
   "items": [
-    {"name": "품목명", "quantity": 숫자, "unit_price": 숫자, "subtotal": 숫자}
+    {"name": "품목명", "color": "색상/칼라 (없으면 null)", "quantity": 숫자, "unit_price": 숫자, "subtotal": 숫자}
   ],
   "total_amount": 총금액(숫자),
   "notes": "특이사항 (없으면 null)"
@@ -30,7 +30,9 @@ PARSE_PROMPT = """당신은 발주서/주문서 파싱 전문가입니다.
 - 숫자 필드는 숫자만 (쉼표, 통화기호 제외)
 - 날짜는 YYYY-MM-DD
 - 못 찾은 정보는 null
-- 중국어/한국어/영어 모두 처리"""
+- 중국어/한국어/영어 모두 처리
+- 색상/칼라/颜色/color 정보가 있으면 반드시 color 필드에 포함
+- 같은 품목이라도 색상이 다르면 별도 항목으로 분리"""
 
 
 def parse_file(uploaded_file, api_key: str) -> dict:
