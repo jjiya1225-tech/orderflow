@@ -1,6 +1,6 @@
 """
-OrderFlow - AI 발주 관리 시스템 v2
-Apple-inspired minimal UI
+OrderFlow - AI 발주 관리 시스템 v3
+팀원 중심 UI: 입고일 · 품목 · 수량
 """
 
 import streamlit as st
@@ -19,7 +19,7 @@ st.set_page_config(page_title="OrderFlow", page_icon="📦", layout="wide", init
 API_KEY = st.secrets.get("ANTHROPIC_API_KEY", "")
 
 # ════════════════════════════════════════════
-# Apple-inspired CSS
+# CSS (간결하게)
 # ════════════════════════════════════════════
 st.markdown("""
 <style>
@@ -28,33 +28,25 @@ html, body, [class*="css"] {
     font-family: 'Inter', 'Noto Sans KR', -apple-system, BlinkMacSystemFont, sans-serif;
     -webkit-font-smoothing: antialiased;
 }
-
-/* 배경 */
 .stApp { background: #fafafa; }
-.block-container { padding-top: 1.2rem; max-width: 1000px; }
+.block-container { padding-top: 2rem; max-width: 960px; }
 
 /* 사이드바 */
 [data-testid="stSidebar"] {
     background: #ffffff;
     border-right: 1px solid #f0f0f0;
 }
-[data-testid="stSidebar"] [data-testid="stMarkdown"] { color: #1d1d1f; }
 
-/* 메트릭 */
+/* 메트릭 카드 */
 [data-testid="stMetric"] {
     background: #ffffff;
     border: 1px solid #f0f0f0;
     border-radius: 16px;
     padding: 20px 22px;
     box-shadow: 0 1px 4px rgba(0,0,0,0.03);
-    transition: all 0.2s ease;
 }
-[data-testid="stMetric"]:hover {
-    box-shadow: 0 4px 12px rgba(0,0,0,0.06);
-    transform: translateY(-1px);
-}
-[data-testid="stMetricLabel"] { font-size: 12px; font-weight: 500; color: #86868b; letter-spacing: 0.3px; }
-[data-testid="stMetricValue"] { font-size: 30px; font-weight: 700; color: #1d1d1f; letter-spacing: -0.5px; }
+[data-testid="stMetricLabel"] { font-size: 12px; font-weight: 500; color: #86868b; }
+[data-testid="stMetricValue"] { font-size: 28px; font-weight: 700; color: #1d1d1f; }
 
 /* 버튼 */
 .stButton > button {
@@ -62,75 +54,26 @@ html, body, [class*="css"] {
     font-weight: 500;
     font-size: 14px;
     padding: 8px 20px;
-    transition: all 0.2s ease;
     border: 1px solid #d2d2d7;
 }
-.stButton > button:hover { transform: translateY(-1px); box-shadow: 0 4px 12px rgba(0,0,0,0.08); }
 .stButton > button[kind="primary"] {
     background: #0071e3;
     border-color: #0071e3;
     color: white;
-    border-radius: 12px;
 }
-.stButton > button[kind="primary"]:hover { background: #0077ED; }
 
 /* 입력 필드 */
 .stTextInput > div > div > input,
-.stSelectbox > div > div > div,
 .stTextArea > div > div > textarea {
     border-radius: 10px;
     border-color: #d2d2d7;
-    font-size: 14px;
 }
-.stTextInput > div > div > input:focus,
-.stTextArea > div > div > textarea:focus {
-    border-color: #0071e3;
-    box-shadow: 0 0 0 3px rgba(0,113,227,0.12);
-}
-
-/* 데이터프레임 */
-.stDataFrame { border-radius: 12px; overflow: hidden; }
 
 /* Expander */
 div[data-testid="stExpander"] {
     border: 1px solid #f0f0f0;
     border-radius: 14px;
     background: white;
-    box-shadow: 0 1px 4px rgba(0,0,0,0.02);
-}
-
-/* 구분선 */
-hr { border-color: #f0f0f0 !important; }
-
-/* 파일 업로더 */
-[data-testid="stFileUploader"] {
-    border-radius: 14px;
-}
-
-/* 알림 */
-.stSuccess, .stInfo, .stWarning, .stError {
-    border-radius: 12px;
-}
-
-/* 커스텀 카드 */
-.of-card {
-    background: #ffffff;
-    border: 1px solid #f0f0f0;
-    border-radius: 16px;
-    padding: 20px 22px;
-    margin-bottom: 12px;
-    box-shadow: 0 1px 4px rgba(0,0,0,0.02);
-    transition: all 0.2s ease;
-}
-.of-card:hover {
-    box-shadow: 0 4px 16px rgba(0,0,0,0.06);
-}
-
-/* 긴급 카드 */
-.of-urgent {
-    background: #fff5f5;
-    border: 1px solid #fed7d7;
-    border-left: 4px solid #e53e3e;
 }
 
 /* 캘린더 */
@@ -153,12 +96,11 @@ hr { border-color: #f0f0f0 !important; }
     border-radius: 10px;
     font-size: 13px;
     min-height: 44px;
-    position: relative;
 }
 .cal-day.today { background: #f5f5f7; font-weight: 700; }
-.cal-day.has-order { background: #e8f4fd; cursor: pointer; }
+.cal-day.has-order { background: #e8f4fd; }
 .cal-day.has-order.urgent { background: #fff5f5; }
-.cal-day .cal-dot {
+.cal-dot {
     width: 6px; height: 6px;
     border-radius: 50%;
     background: #0071e3;
@@ -166,45 +108,15 @@ hr { border-color: #f0f0f0 !important; }
 }
 .cal-day.urgent .cal-dot { background: #e53e3e; }
 .cal-day.empty { color: #d2d2d7; }
-
-/* 상태 뱃지 */
-.of-badge {
-    display: inline-block;
-    padding: 4px 12px;
-    border-radius: 20px;
-    font-size: 12px;
-    font-weight: 500;
-}
-
-/* 타이틀 */
-.of-title {
-    font-size: 28px;
-    font-weight: 700;
-    color: #1d1d1f;
-    letter-spacing: -0.5px;
-    margin-bottom: 4px;
-}
-.of-subtitle {
-    font-size: 14px;
-    color: #86868b;
-    margin-bottom: 24px;
-}
 </style>
 """, unsafe_allow_html=True)
 
 
 def fmt_amount(amt, cur="KRW"):
-    if not amt: return "-"
+    if not amt:
+        return "-"
     sym = {"KRW": "₩", "CNY": "¥", "USD": "$", "JPY": "¥"}.get(cur, "")
     return f"{sym}{amt:,.0f}"
-
-def status_color(s):
-    return {"확인 대기": ("#b45309", "#fef3c7"), "확인 완료": ("#047857", "#d1fae5"),
-            "배송 중": ("#1d4ed8", "#dbeafe"), "입고 완료": ("#6b7280", "#f3f4f6")}.get(s, ("#6b7280", "#f3f4f6"))
-
-def status_badge(s):
-    fg, bg = status_color(s)
-    return f'<span class="of-badge" style="background:{bg};color:{fg};">{s}</span>'
 
 
 # ════════════════════════════════════════════
@@ -214,20 +126,24 @@ with st.sidebar:
     st.markdown("#### 📦 OrderFlow")
     st.caption("AI 발주 관리")
     st.markdown("---")
-    page = st.radio("메뉴", ["📊 대시보드", "⬆️ 발주서 업로드", "📋 발주 목록", "🔧 관리"], label_visibility="collapsed")
+    page = st.radio(
+        "메뉴",
+        ["📊 대시보드", "⬆️ 발주서 업로드", "📋 발주 목록", "🔧 관리"],
+        label_visibility="collapsed",
+    )
     st.markdown("---")
     if API_KEY:
-        st.markdown('<small style="color:#047857;">● AI 연결됨</small>', unsafe_allow_html=True)
+        st.caption("● AI 연결됨")
     else:
-        st.markdown('<small style="color:#e53e3e;">● API 미설정</small>', unsafe_allow_html=True)
+        st.caption("● API 미설정")
 
 
 # ════════════════════════════════════════════
 # 📊 대시보드
 # ════════════════════════════════════════════
 if page == "📊 대시보드":
-    st.markdown('<div class="of-title">대시보드</div>', unsafe_allow_html=True)
-    st.markdown('<div class="of-subtitle">발주 현황을 한눈에 확인하세요</div>', unsafe_allow_html=True)
+    st.title("대시보드")
+    st.caption("발주 현황을 한눈에 확인하세요")
 
     orders = load_all_orders()
     stats = get_stats()
@@ -245,20 +161,25 @@ if page == "📊 대시보드":
     else:
         st.markdown("---")
         today_str = datetime.now().strftime("%Y-%m-%d")
+        now = datetime.now()
 
         # ── 입고 캘린더 ──
-        st.markdown("#### 📅 입고 캘린더")
+        st.subheader("📅 입고 캘린더")
 
-        now = datetime.now()
         cal_col1, cal_col2 = st.columns([3, 1])
         with cal_col2:
-            month_offset = st.selectbox("월 선택", [0, 1, 2], format_func=lambda x: (now + timedelta(days=30*x)).strftime("%Y년 %m월"), label_visibility="collapsed")
+            month_offset = st.selectbox(
+                "월 선택",
+                [0, 1, 2],
+                format_func=lambda x: (now + timedelta(days=30 * x)).strftime("%Y년 %m월"),
+                label_visibility="collapsed",
+            )
 
         target_date = now + timedelta(days=30 * month_offset)
         year, month = target_date.year, target_date.month
         first_weekday, num_days = monthrange(year, month)
 
-        # 해당 월의 입고 예정 수집
+        # 해당 월 입고 예정 수집
         eta_map = {}
         for o in orders:
             if o.get("eta") and o.get("status") != "입고 완료":
@@ -269,87 +190,76 @@ if page == "📊 대시보드":
                         if day not in eta_map:
                             eta_map[day] = []
                         eta_map[day].append(o)
-                except:
+                except Exception:
                     pass
 
+        # 캘린더 HTML (단순 그리드만 — 깨지지 않도록)
         weekdays = ["월", "화", "수", "목", "금", "토", "일"]
         cal_html = '<div class="cal-grid">'
         for w in weekdays:
             cal_html += f'<div class="cal-header">{w}</div>'
-
-        # 빈 칸
         for _ in range(first_weekday):
             cal_html += '<div class="cal-day empty"></div>'
-
         for day in range(1, num_days + 1):
-            classes = "cal-day"
+            cls = "cal-day"
             dot = ""
-            tooltip = ""
-
             if day == now.day and month == now.month and year == now.year:
-                classes += " today"
-
+                cls += " today"
             if day in eta_map:
-                day_orders = eta_map[day]
                 is_past = datetime(year, month, day) < datetime(now.year, now.month, now.day)
-                classes += " has-order"
+                cls += " has-order"
                 if is_past:
-                    classes += " urgent"
-                total_items = sum(sum(it.get("quantity", 0) for it in o.get("items", [])) for o in day_orders)
-                dot = f'<div class="cal-dot"></div>'
-                tooltip = f'{len(day_orders)}건 · {total_items:,}개'
-
-            cal_html += f'<div class="{classes}" title="{tooltip}">{day}{dot}</div>'
-
-        cal_html += '</div>'
+                    cls += " urgent"
+                dot = '<div class="cal-dot"></div>'
+            cal_html += f'<div class="{cls}">{day}{dot}</div>'
+        cal_html += "</div>"
 
         with cal_col1:
             st.markdown(cal_html, unsafe_allow_html=True)
 
-        # 캘린더 아래 입고 예정 리스트
+        # ── 입고 예정 리스트 (Streamlit 네이티브) ──
         if eta_map:
             st.markdown("")
-            sorted_days = sorted(eta_map.keys())
-            for day in sorted_days:
+            for day in sorted(eta_map.keys()):
                 day_date = f"{year}-{month:02d}-{day:02d}"
                 is_past = day_date < today_str
                 for o in eta_map[day]:
                     items = o.get("items", [])
                     total_qty = sum(i.get("quantity", 0) for i in items)
-                    item_names = ", ".join(i.get("display_name") or i.get("name", "") for i in items[:3])
-                    if len(items) > 3:
-                        item_names += f" 외 {len(items)-3}종"
-                    status = o.get("status", "확인 대기")
-                    fg, bg = status_color(status)
 
-                    card_class = "of-card of-urgent" if is_past else "of-card"
-                    late_badge = ""
+                    # 지연 여부 표시
                     if is_past:
-                        days_late = (datetime.now() - datetime.strptime(day_date, "%Y-%m-%d")).days
-                        late_badge = f'<span style="background:#e53e3e;color:white;padding:3px 10px;border-radius:10px;font-size:11px;font-weight:600;margin-left:8px;">{days_late}일 지연</span>'
+                        days_late = (now - datetime.strptime(day_date, "%Y-%m-%d")).days
+                        label = f"🔴  {month}/{day} — {o.get('supplier', '')}  ·  **{days_late}일 지연**"
+                    else:
+                        label = f"🔵  {month}/{day} — {o.get('supplier', '')}"
 
-                    st.markdown(f"""
-                    <div class="{card_class}">
-                        <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
-                            <div>
-                                <span style="font-size:13px;color:#86868b;">{month}/{day}</span>
-                                <span style="font-weight:600;color:#1d1d1f;margin-left:8px;">{o.get('supplier','')}</span>
-                                {late_badge}
-                            </div>
-                            <div style="display:flex;gap:10px;align-items:center;">
-                                <span style="font-size:14px;font-weight:600;color:#1d1d1f;">{fmt_amount(o.get('total_amount'), o.get('currency'))}</span>
-                                {status_badge(status)}
-                            </div>
-                        </div>
-                        <div style="font-size:13px;color:#6e6e73;margin-top:8px;">📦 {total_qty:,}개 — {item_names}</div>
-                    </div>""", unsafe_allow_html=True)
+                    with st.expander(label, expanded=is_past):
+                        # 품목 + 수량 테이블
+                        rows = []
+                        for it in items:
+                            display = it.get("display_name") or ""
+                            name = it.get("name", "")
+                            # 내부명이 있으면 내부명 표시, 없으면 원본명
+                            show_name = display if display else name
+                            rows.append({
+                                "품목": show_name,
+                                "수량": it.get("quantity", 0),
+                            })
+                        df = pd.DataFrame(rows)
+                        st.dataframe(df, use_container_width=True, hide_index=True)
+                        st.caption(f"총 {total_qty:,}개  ·  {fmt_amount(o.get('total_amount'), o.get('currency'))}")
 
         st.markdown("---")
 
-        # ── 전체 발주 카드 ──
-        st.markdown("#### 전체 발주")
+        # ── 전체 발주 목록 (간결 테이블) ──
+        st.subheader("전체 발주")
 
-        status_filter = st.selectbox("필터", ["전체", "확인 대기", "확인 완료", "배송 중", "입고 완료"], label_visibility="collapsed")
+        status_filter = st.selectbox(
+            "필터",
+            ["전체", "확인 대기", "확인 완료", "배송 중", "입고 완료"],
+            label_visibility="collapsed",
+        )
         filtered = orders if status_filter == "전체" else [o for o in orders if o.get("status") == status_filter]
 
         for o in filtered[:20]:
@@ -357,48 +267,41 @@ if page == "📊 대시보드":
             total_qty = sum(i.get("quantity", 0) for i in items)
             status = o.get("status", "확인 대기")
 
-            st.markdown(f"""
-            <div class="of-card">
-                <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:8px;">
-                    <div>
-                        <div style="font-size:11px;color:#86868b;margin-bottom:2px;">{o['id']}</div>
-                        <div style="font-size:16px;font-weight:600;color:#1d1d1f;">{o.get('supplier','')}</div>
-                    </div>
-                    <div style="text-align:right;">
-                        <div style="font-size:18px;font-weight:700;color:#1d1d1f;">{fmt_amount(o.get('total_amount'), o.get('currency'))}</div>
-                        {status_badge(status)}
-                    </div>
-                </div>
-                <div style="display:flex;gap:20px;flex-wrap:wrap;font-size:12px;color:#86868b;margin-top:12px;">
-                    <span>발주 {o.get('order_date','-')}</span>
-                    <span>입고 {o.get('eta') or '-'}</span>
-                    <span>{total_qty:,}개 · {len(items)}종</span>
-                </div>
-                <div style="margin-top:12px;padding-top:12px;border-top:1px solid #f5f5f7;">
-                    <table style="width:100%;font-size:12px;border-collapse:collapse;">
-                        <tr style="color:#86868b;"><td style="padding:4px 0;width:45%;">품목</td><td style="width:10%;">내부명</td><td style="width:15%;text-align:right;">수량</td><td style="width:15%;text-align:right;">단가</td><td style="width:15%;text-align:right;">소계</td></tr>
-                        {''.join(f"""<tr style="color:#1d1d1f;">
-                            <td style="padding:4px 0;font-size:12px;">{it.get('name','')}</td>
-                            <td style="padding:4px 0;font-size:11px;color:#0071e3;">{it.get('display_name','') if it.get('display_name') and it.get('display_name') != it.get('name') else ''}</td>
-                            <td style="text-align:right;">{it.get('quantity',0):,}</td>
-                            <td style="text-align:right;">{it.get('unit_price',0):,}</td>
-                            <td style="text-align:right;font-weight:500;">{it.get('subtotal',0):,}</td>
-                        </tr>
-                        {f'<tr><td colspan="5" style="padding:2px 0;font-size:11px;color:#86868b;">💬 {it["memo"]}</td></tr>' if it.get('memo') else ''}
-                        """ for it in items[:8])}
-                        {'<tr><td colspan="5" style="padding:4px 0;font-size:11px;color:#86868b;">… 외 '+str(len(items)-8)+'개 품목</td></tr>' if len(items) > 8 else ''}
-                    </table>
-                </div>
-                {f'<div style="margin-top:8px;font-size:12px;color:#0071e3;background:#f5f5f7;padding:8px 12px;border-radius:8px;">📝 {o.get("notes")}</div>' if o.get("notes") else ''}
-            </div>""", unsafe_allow_html=True)
+            header = f"{o['id']}  ·  **{o.get('supplier', '')}**  ·  {fmt_amount(o.get('total_amount'), o.get('currency'))}  ·  {status}"
+
+            with st.expander(header):
+                st.caption(
+                    f"발주일: {o.get('order_date', '-')}  |  "
+                    f"입고예정: {o.get('eta') or '-'}  |  "
+                    f"{total_qty:,}개 · {len(items)}종"
+                )
+                # 품목 테이블
+                rows = []
+                for it in items:
+                    display = it.get("display_name") or ""
+                    name = it.get("name", "")
+                    show_name = display if display else name
+                    memo = it.get("memo", "")
+                    rows.append({
+                        "품목": show_name,
+                        "수량": it.get("quantity", 0),
+                        "단가": it.get("unit_price", 0),
+                        "소계": it.get("subtotal", 0),
+                        "메모": memo,
+                    })
+                df = pd.DataFrame(rows)
+                st.dataframe(df, use_container_width=True, hide_index=True)
+
+                if o.get("notes"):
+                    st.info(f"📝 {o['notes']}")
 
 
 # ════════════════════════════════════════════
 # ⬆️ 발주서 업로드
 # ════════════════════════════════════════════
 elif page == "⬆️ 발주서 업로드":
-    st.markdown('<div class="of-title">발주서 업로드</div>', unsafe_allow_html=True)
-    st.markdown('<div class="of-subtitle">파일을 업로드하면 AI가 자동으로 분석합니다</div>', unsafe_allow_html=True)
+    st.title("발주서 업로드")
+    st.caption("파일을 업로드하면 AI가 자동으로 분석합니다")
 
     if not API_KEY:
         st.error("Claude API 키가 설정되지 않았습니다. 관리자에게 문의하세요.")
@@ -411,9 +314,8 @@ elif page == "⬆️ 발주서 업로드":
     )
 
     if uploaded:
-        # 미리보기
         st.markdown("#### 업로드된 파일")
-        st.caption(f"{uploaded.name} · {uploaded.size/1024:.1f} KB")
+        st.caption(f"{uploaded.name} · {uploaded.size / 1024:.1f} KB")
 
         ext = uploaded.name.split(".")[-1].lower()
         if ext in ("jpg", "jpeg", "png", "webp"):
@@ -424,12 +326,10 @@ elif page == "⬆️ 발주서 업로드":
                 preview = pd.read_csv(uploaded) if ext == "csv" else pd.read_excel(uploaded)
                 st.dataframe(preview.head(10), use_container_width=True, hide_index=True)
                 uploaded.seek(0)
-            except:
+            except Exception:
                 uploaded.seek(0)
 
         st.markdown("---")
-
-        # AI 분석
         st.markdown("#### AI 분석 결과")
 
         cache_key = f"parsed_{uploaded.name}_{uploaded.size}"
@@ -459,25 +359,22 @@ elif page == "⬆️ 발주서 업로드":
             with col3:
                 parsed["eta"] = st.text_input("입고예정일", value=parsed.get("eta") or "")
             with col4:
-                parsed["currency"] = st.selectbox(
-                    "통화", ["KRW", "CNY", "USD", "JPY"],
-                    index=["KRW", "CNY", "USD", "JPY"].index(parsed.get("currency", "KRW"))
-                    if parsed.get("currency") in ["KRW", "CNY", "USD", "JPY"] else 0,
-                )
+                currencies = ["KRW", "CNY", "USD", "JPY"]
+                cur_val = parsed.get("currency", "KRW")
+                cur_idx = currencies.index(cur_val) if cur_val in currencies else 0
+                parsed["currency"] = st.selectbox("통화", currencies, index=cur_idx)
 
             st.markdown("---")
 
-            # ── 품목별 수정 (내부명 + 메모) ──
+            # ── 품목별 수정 ──
             st.markdown("#### 품목 상세")
-            st.caption("원본명은 발주서 그대로, 내부명은 우리 회사에서 부르는 이름, 메모는 특이사항을 적으세요.")
+            st.caption("내부명: 우리 팀에서 부르는 이름으로 수정  ·  메모: 특이사항 기록")
 
             items = parsed.get("items", [])
             updated_items = []
 
             for idx, item in enumerate(items):
-                with st.container():
-                    st.markdown(f'<div class="of-card">', unsafe_allow_html=True)
-
+                with st.expander(f"#{idx + 1}  {item.get('name', '')}", expanded=True):
                     c1, c2 = st.columns(2)
                     with c1:
                         original_name = st.text_input(
@@ -496,20 +393,27 @@ elif page == "⬆️ 발주서 업로드":
 
                     c3, c4, c5 = st.columns(3)
                     with c3:
-                        qty = st.number_input("수량", value=int(item.get("quantity", 0)), key=f"qty_{idx}", min_value=0)
+                        qty = st.number_input(
+                            "수량", value=int(item.get("quantity", 0)),
+                            key=f"qty_{idx}", min_value=0,
+                        )
                     with c4:
-                        price = st.number_input("단가", value=float(item.get("unit_price", 0)), key=f"price_{idx}", min_value=0.0, format="%.2f")
+                        price = st.number_input(
+                            "단가", value=float(item.get("unit_price", 0)),
+                            key=f"price_{idx}", min_value=0.0, format="%.2f",
+                        )
                     with c5:
-                        subtotal = st.number_input("소계", value=float(item.get("subtotal", 0)), key=f"sub_{idx}", min_value=0.0, format="%.2f")
+                        subtotal = st.number_input(
+                            "소계", value=float(item.get("subtotal", 0)),
+                            key=f"sub_{idx}", min_value=0.0, format="%.2f",
+                        )
 
                     memo = st.text_input(
-                        "💬 메모",
+                        "메모",
                         value=item.get("memo", ""),
                         key=f"memo_{idx}",
                         placeholder="예: 색온도 확인 필요, 포장 변경됨 등",
                     )
-
-                    st.markdown('</div>', unsafe_allow_html=True)
 
                     updated_items.append({
                         "name": original_name,
@@ -522,13 +426,11 @@ elif page == "⬆️ 발주서 업로드":
 
             parsed["items"] = updated_items
             parsed["total_amount"] = sum(i.get("subtotal", 0) for i in updated_items)
-
             total_qty = sum(i.get("quantity", 0) for i in updated_items)
 
             st.markdown("---")
             st.markdown(f"**합계:** {total_qty:,}개 · {fmt_amount(parsed.get('total_amount'), parsed.get('currency'))}")
 
-            # 발주 전체 메모
             order_notes = st.text_area(
                 "📝 발주 메모",
                 value=parsed.get("notes") or "",
@@ -573,8 +475,8 @@ elif page == "⬆️ 발주서 업로드":
 # 📋 발주 목록
 # ════════════════════════════════════════════
 elif page == "📋 발주 목록":
-    st.markdown('<div class="of-title">발주 목록</div>', unsafe_allow_html=True)
-    st.markdown('<div class="of-subtitle">발주 내역을 확인하고 관리하세요</div>', unsafe_allow_html=True)
+    st.title("발주 목록")
+    st.caption("발주 내역을 확인하고 관리하세요")
 
     orders = load_all_orders()
     if not orders:
@@ -602,33 +504,34 @@ elif page == "📋 발주 목록":
         items = o.get("items", [])
         total_qty = sum(i.get("quantity", 0) for i in items)
 
-        with st.expander(f"{oid} — {o.get('supplier', '')} · {fmt_amount(o.get('total_amount'), o.get('currency'))} · {status}"):
+        header = f"{oid}  ·  **{o.get('supplier', '')}**  ·  {fmt_amount(o.get('total_amount'), o.get('currency'))}  ·  {status}"
 
-            c1, c2 = st.columns([3, 1])
-            with c1:
-                st.markdown(f"""
-                <div style="display:flex;gap:24px;flex-wrap:wrap;font-size:13px;color:#6e6e73;margin-bottom:12px;">
-                    <span>📅 {o.get('order_date','-')}</span>
-                    <span>🚚 {o.get('eta') or '-'}</span>
-                    <span>📦 {total_qty:,}개 · {len(items)}종</span>
-                    <span>📎 {o.get('source_file','-')}</span>
-                </div>""", unsafe_allow_html=True)
+        with st.expander(header):
+            st.caption(
+                f"발주일: {o.get('order_date', '-')}  |  "
+                f"입고예정: {o.get('eta') or '-'}  |  "
+                f"{total_qty:,}개 · {len(items)}종  |  "
+                f"파일: {o.get('source_file', '-')}"
+            )
 
-            with c2:
-                new_status = st.selectbox(
-                    "상태", ["확인 대기", "확인 완료", "배송 중", "입고 완료"],
-                    index=["확인 대기", "확인 완료", "배송 중", "입고 완료"].index(status)
-                    if status in ["확인 대기", "확인 완료", "배송 중", "입고 완료"] else 0,
-                    key=f"st_{oid}", label_visibility="collapsed",
-                )
-                if new_status != status:
-                    if st.button("저장", key=f"save_{oid}", use_container_width=True):
-                        update_order_status(oid, new_status)
-                        st.rerun()
+            # 상태 변경
+            new_status = st.selectbox(
+                "상태 변경",
+                ["확인 대기", "확인 완료", "배송 중", "입고 완료"],
+                index=["확인 대기", "확인 완료", "배송 중", "입고 완료"].index(status)
+                if status in ["확인 대기", "확인 완료", "배송 중", "입고 완료"] else 0,
+                key=f"st_{oid}",
+            )
+            if new_status != status:
+                if st.button("상태 저장", key=f"save_{oid}"):
+                    update_order_status(oid, new_status)
+                    st.rerun()
 
-            # 품목 테이블 (수정 가능)
+            st.markdown("---")
+
+            # 품목 테이블 (내부명, 메모 수정 가능)
             if items:
-                st.markdown("**품목 상세** (내부명과 메모를 수정할 수 있습니다)")
+                st.markdown("**품목 상세** — 내부명과 메모를 수정할 수 있습니다")
 
                 items_data = []
                 for it in items:
@@ -652,7 +555,7 @@ elif page == "📋 발주 목록":
                         "수량": st.column_config.NumberColumn("수량", format="%.0f"),
                         "단가": st.column_config.NumberColumn("단가", format="%.2f"),
                         "소계": st.column_config.NumberColumn("소계", format="%.2f"),
-                        "메모": st.column_config.TextColumn("메모", width="medium", help="품목별 특이사항"),
+                        "메모": st.column_config.TextColumn("메모", width="medium"),
                     },
                     key=f"edit_{oid}",
                 )
@@ -678,7 +581,8 @@ elif page == "📋 발주 목록":
             if o.get("notes"):
                 st.info(f"📝 {o['notes']}")
 
-            if st.button("삭제", key=f"del_{oid}"):
+            st.markdown("---")
+            if st.button("🗑️ 삭제", key=f"del_{oid}"):
                 delete_order(oid)
                 st.rerun()
 
@@ -686,15 +590,19 @@ elif page == "📋 발주 목록":
     st.markdown("---")
     if orders:
         summary_data = []
-        items_data = []
+        all_items_data = []
         for o in orders:
             summary_data.append({
-                "발주번호": o["id"], "거래처": o.get("supplier"), "발주일": o.get("order_date"),
-                "입고예정일": o.get("eta"), "통화": o.get("currency"), "총금액": o.get("total_amount"),
-                "상태": o.get("status"), "출처": o.get("source_file"),
+                "발주번호": o["id"],
+                "거래처": o.get("supplier"),
+                "발주일": o.get("order_date"),
+                "입고예정일": o.get("eta"),
+                "통화": o.get("currency"),
+                "총금액": o.get("total_amount"),
+                "상태": o.get("status"),
             })
             for i in o.get("items", []):
-                items_data.append({
+                all_items_data.append({
                     "발주번호": o["id"],
                     "원본명": i.get("name"),
                     "내부명": i.get("display_name") or "",
@@ -707,11 +615,11 @@ elif page == "📋 발주 목록":
         buf = BytesIO()
         with pd.ExcelWriter(buf, engine="openpyxl") as writer:
             pd.DataFrame(summary_data).to_excel(writer, sheet_name="발주요약", index=False)
-            if items_data:
-                pd.DataFrame(items_data).to_excel(writer, sheet_name="품목상세", index=False)
+            if all_items_data:
+                pd.DataFrame(all_items_data).to_excel(writer, sheet_name="품목상세", index=False)
 
         st.download_button(
-            "엑셀 다운로드",
+            "📥 엑셀 다운로드",
             data=buf.getvalue(),
             file_name=f"발주현황_{datetime.now().strftime('%Y%m%d')}.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -722,7 +630,7 @@ elif page == "📋 발주 목록":
 # 🔧 관리
 # ════════════════════════════════════════════
 elif page == "🔧 관리":
-    st.markdown('<div class="of-title">관리</div>', unsafe_allow_html=True)
+    st.title("관리")
 
     st.markdown("#### API 상태")
     if API_KEY:
@@ -761,7 +669,8 @@ elif page == "🔧 관리":
         if st.session_state.get("confirm_delete"):
             from pathlib import Path
             p = Path("data/orders.json")
-            if p.exists(): p.unlink()
+            if p.exists():
+                p.unlink()
             st.session_state["confirm_delete"] = False
             st.rerun()
         else:
