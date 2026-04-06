@@ -75,46 +75,176 @@ with st.sidebar:
 if page == "📊 대시보드":
     st.markdown("## 📊 대시보드")
 
+    orders = load_all_orders()
     stats = get_stats()
+
+    # ── 통계 카드 ──
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("전체 발주", f"{stats['total']}건")
     c2.metric("확인 대기", f"{stats['pending']}건")
     c3.metric("배송 중", f"{stats['shipping']}건")
     c4.metric("거래처", f"{stats['suppliers']}곳")
 
-    st.divider()
-    st.markdown("### 최근 발주 현황")
-
-    orders = load_all_orders()
     if not orders:
+        st.divider()
         st.info("📭 등록된 발주가 없습니다. **⬆️ 발주서 업로드** 메뉴에서 시작하세요!")
+
     else:
+        st.divider()
+
+        # ── 입고 예정 타임라인 ──
+        today_str = datetime.now().strftime("%Y-%m-%d")
+        upcoming = [o for o in orders if o.get("eta") and o["eta"] >= today_str and o.get("status") != "입고 완료"]
+        upcoming.sort(key=lambda x: x.get("eta", ""))
+
+        overdue = [o for o in orders if o.get("eta") and o["eta"] < today_str and o.get("status") not in ("입고 완료",)]
+
+        if overdue:
+            st.markdown("### 🚨 입고 지연")
+            for o in overdue:
+                items = o.get("items", [])
+                total_qty = sum(i.get("quantity", 0) for i in items)
+                days_late = (datetime.now() - datetime.strptime(o["eta"], "%Y-%m-%d")).days
+                st.markdown(
+                    f"""<div style="background:#fef2f2;border:1px solid #fecaca;border-radius:10px;padding:14px 18px;margin-bottom:10px;">
+                    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
+                        <div>
+                            <span style="font-weight:700;color:#dc2626;">{o['id']}</span>
+                            <span style="color:#6b7280;margin-left:8px;">{o.get('supplier','')}</span>
+                        </div>
+                        <div style="display:flex;gap:16px;align-items:center;flex-wrap:wrap;">
+                            <span style="font-size:13px;">📦 {total_qty:,}개</span>
+                            <span style="font-size:13px;font-weight:600;">{fmt_amount(o.get('total_amount'), o.get('currency'))}</span>
+                            <span style="background:#dc2626;color:white;padding:2px 10px;border-radius:12px;font-size:12px;font-weight:500;">{days_late}일 지연</span>
+                        </div>
+                    </div>
+                    <div style="font-size:12px;color:#9ca3af;margin-top:6px;">예정일: {o['eta']} | {', '.join(i['name'] for i in items[:3])}{' 외 '+str(len(items)-3)+'종' if len(items)>3 else ''}</div>
+                    </div>""",
+                    unsafe_allow_html=True,
+                )
+
+        if upcoming:
+            st.markdown("### 📅 입고 예정")
+            for o in upcoming[:5]:
+                items = o.get("items", [])
+                total_qty = sum(i.get("quantity", 0) for i in items)
+                days_left = (datetime.strptime(o["eta"], "%Y-%m-%d") - datetime.now()).days + 1
+                status = o.get("status", "확인 대기")
+
+                if days_left <= 3:
+                    border_color = "#f59e0b"
+                    bg_color = "#fffbeb"
+                    urgency = f"D-{days_left}"
+                elif days_left <= 7:
+                    border_color = "#3b82f6"
+                    bg_color = "#eff6ff"
+                    urgency = f"D-{days_left}"
+                else:
+                    border_color = "#e5e7eb"
+                    bg_color = "#ffffff"
+                    urgency = f"D-{days_left}"
+
+                status_colors = {"확인 대기": "#d97706", "확인 완료": "#16a34a", "배송 중": "#2563eb"}
+                s_color = status_colors.get(status, "#6b7280")
+
+                st.markdown(
+                    f"""<div style="background:{bg_color};border:1px solid {border_color};border-left:4px solid {border_color};border-radius:10px;padding:14px 18px;margin-bottom:10px;">
+                    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
+                        <div>
+                            <span style="font-weight:700;color:#111827;">{o['id']}</span>
+                            <span style="color:#6b7280;margin-left:8px;">{o.get('supplier','')}</span>
+                        </div>
+                        <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;">
+                            <span style="font-size:13px;">📦 {total_qty:,}개</span>
+                            <span style="font-size:13px;font-weight:600;">{fmt_amount(o.get('total_amount'), o.get('currency'))}</span>
+                            <span style="background:{s_color};color:white;padding:2px 10px;border-radius:12px;font-size:12px;font-weight:500;">{status}</span>
+                            <span style="font-weight:700;font-size:14px;color:{border_color};">{urgency}</span>
+                        </div>
+                    </div>
+                    <div style="font-size:12px;color:#9ca3af;margin-top:6px;">입고예정: {o['eta']} | {', '.join(i['name'] for i in items[:3])}{' 외 '+str(len(items)-3)+'종' if len(items)>3 else ''}</div>
+                    </div>""",
+                    unsafe_allow_html=True,
+                )
+        else:
+            if not overdue:
+                st.info("📅 예정된 입고 건이 없습니다.")
+
+        st.divider()
+
+        # ── 상태별 현황 ──
+        st.markdown("### 📋 상태별 현황")
+
+        status_counts = {}
+        for o in orders:
+            s = o.get("status", "확인 대기")
+            status_counts[s] = status_counts.get(s, 0) + 1
+
+        status_order = ["확인 대기", "확인 완료", "배송 중", "입고 완료"]
+        status_emoji = {"확인 대기": "🟡", "확인 완료": "🟢", "배송 중": "🔵", "입고 완료": "⚪"}
+        status_bg = {"확인 대기": "#fffbeb", "확인 완료": "#f0fdf4", "배송 중": "#eff6ff", "입고 완료": "#f9fafb"}
+        status_border = {"확인 대기": "#fde68a", "확인 완료": "#bbf7d0", "배송 중": "#bfdbfe", "입고 완료": "#e5e7eb"}
+
+        cols = st.columns(4)
+        for i, s in enumerate(status_order):
+            count = status_counts.get(s, 0)
+            s_orders = [o for o in orders if o.get("status") == s]
+            total_amt = sum(o.get("total_amount", 0) for o in s_orders)
+            total_qty = sum(sum(it.get("quantity", 0) for it in o.get("items", [])) for o in s_orders)
+
+            with cols[i]:
+                st.markdown(
+                    f"""<div style="background:{status_bg[s]};border:1px solid {status_border[s]};border-radius:10px;padding:16px;text-align:center;">
+                    <div style="font-size:24px;margin-bottom:4px;">{status_emoji[s]}</div>
+                    <div style="font-size:13px;color:#6b7280;margin-bottom:2px;">{s}</div>
+                    <div style="font-size:28px;font-weight:700;color:#111827;">{count}건</div>
+                    <div style="font-size:11px;color:#9ca3af;margin-top:6px;">{total_qty:,}개 | {total_amt:,.0f}</div>
+                    </div>""",
+                    unsafe_allow_html=True,
+                )
+
+        st.divider()
+
+        # ── 최근 발주 카드 ──
+        st.markdown("### 🗂️ 전체 발주 요약")
+
         status_filter = st.selectbox("상태 필터", ["전체", "확인 대기", "확인 완료", "배송 중", "입고 완료"], label_visibility="collapsed")
         filtered = orders if status_filter == "전체" else [o for o in orders if o.get("status") == status_filter]
 
-        rows = []
-        for o in filtered[:30]:
+        for o in filtered[:20]:
             items = o.get("items", [])
-            summary = ", ".join(i["name"] for i in items[:2])
-            if len(items) > 2:
-                summary += f" 외 {len(items)-2}종"
             total_qty = sum(i.get("quantity", 0) for i in items)
-            rows.append({
-                "발주번호": o["id"],
-                "거래처": o.get("supplier", "-"),
-                "품목": summary or "-",
-                "총수량": total_qty,
-                "금액": fmt_amount(o.get("total_amount"), o.get("currency")),
-                "입고예정일": o.get("eta") or "-",
-                "상태": o.get("status", "-"),
-            })
+            status = o.get("status", "확인 대기")
+            s_color = {"확인 대기": "#d97706", "확인 완료": "#16a34a", "배송 중": "#2563eb", "입고 완료": "#6b7280"}.get(status, "#6b7280")
+            s_bg = {"확인 대기": "#fffbeb", "확인 완료": "#f0fdf4", "배송 중": "#eff6ff", "입고 완료": "#f9fafb"}.get(status, "#f9fafb")
 
-        if rows:
-            st.dataframe(
-                pd.DataFrame(rows),
-                use_container_width=True,
-                hide_index=True,
-                column_config={"총수량": st.column_config.NumberColumn(format="%d개")},
+            st.markdown(
+                f"""<div style="background:white;border:1px solid #e5e7eb;border-radius:12px;padding:18px;margin-bottom:12px;box-shadow:0 1px 3px rgba(0,0,0,0.04);">
+                <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:8px;">
+                    <div>
+                        <div style="font-size:15px;font-weight:700;color:#111827;margin-bottom:4px;">{o['id']}</div>
+                        <div style="font-size:14px;color:#374151;">{o.get('supplier','')}</div>
+                    </div>
+                    <div style="text-align:right;">
+                        <div style="font-size:18px;font-weight:700;color:#2563eb;">{fmt_amount(o.get('total_amount'), o.get('currency'))}</div>
+                        <span style="background:{s_bg};color:{s_color};padding:3px 12px;border-radius:12px;font-size:12px;font-weight:500;display:inline-block;margin-top:4px;">{status}</span>
+                    </div>
+                </div>
+                <div style="margin-top:12px;display:flex;gap:24px;flex-wrap:wrap;font-size:13px;color:#6b7280;">
+                    <span>📅 발주일: {o.get('order_date','-')}</span>
+                    <span>🚚 입고예정: {o.get('eta') or '-'}</span>
+                    <span>📦 {total_qty:,}개 ({len(items)}종)</span>
+                    <span>📎 {o.get('source_file','-')}</span>
+                </div>
+                <div style="margin-top:10px;padding-top:10px;border-top:1px solid #f3f4f6;">
+                    <table style="width:100%;font-size:12px;border-collapse:collapse;">
+                        <tr style="color:#9ca3af;"><td style="padding:3px 0;width:50%;">품목명</td><td style="width:16%;text-align:right;">수량</td><td style="width:16%;text-align:right;">단가</td><td style="width:18%;text-align:right;">소계</td></tr>
+                        {''.join(f'<tr style="color:#374151;"><td style="padding:3px 0;">{it.get("name","")}</td><td style="text-align:right;">{it.get("quantity",0):,}</td><td style="text-align:right;">{it.get("unit_price",0):,}</td><td style="text-align:right;font-weight:500;">{it.get("subtotal",0):,}</td></tr>' for it in items[:6])}
+                        {'<tr style="color:#9ca3af;"><td colspan="4" style="padding:3px 0;">... 외 '+str(len(items)-6)+'개 품목</td></tr>' if len(items) > 6 else ''}
+                    </table>
+                </div>
+                {f'<div style="margin-top:8px;font-size:12px;color:#2563eb;background:#eff6ff;padding:6px 10px;border-radius:6px;">📝 {o.get("notes")}</div>' if o.get("notes") else ''}
+                </div>""",
+                unsafe_allow_html=True,
             )
 
 
