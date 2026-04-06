@@ -77,6 +77,19 @@ def update_order_status(order_id: str, new_status: str):
         _write_db(db)
 
 
+def update_order(order_id: str, updated_data: dict):
+    """발주 데이터를 업데이트합니다. (품목명, 메모 등 수정)"""
+    with _lock:
+        db = _read_db()
+        for i, o in enumerate(db["orders"]):
+            if o["id"] == order_id:
+                updated_data["id"] = order_id
+                updated_data["created_at"] = o.get("created_at", "")
+                db["orders"][i] = updated_data
+                break
+        _write_db(db)
+
+
 def delete_order(order_id: str):
     with _lock:
         db = _read_db()
