@@ -396,16 +396,24 @@ elif page == "⬆️ 발주서 업로드":
             st.markdown("---")
             st.markdown(f"#### {fname}")
 
-            sc1, sc2, sc3, sc4 = st.columns(4)
+            sc1, sc2, sc3, sc4, sc5 = st.columns([2, 1, 1, 1, 1])
             sc1.metric("거래처", parsed.get("supplier", "-"))
             sc2.metric("품목", f"{len(items)}종")
             sc3.metric("총 수량", f"{total_qty:,}개")
             sc4.metric("금액", fmt_amount(total_amt, currency))
+            with sc5:
+                currencies = ["KRW", "CNY", "USD", "JPY"]
+                cur_idx = currencies.index(currency) if currency in currencies else 0
+                selected_cur = st.selectbox(
+                    "통화", currencies, index=cur_idx,
+                    key=f"cur_quick_{file_key}",
+                )
+                parsed["currency"] = selected_cur
+                currency = selected_cur
 
             st.caption(
                 f"발주일: {parsed.get('order_date', '-')}  |  "
-                f"입고예정: {parsed.get('eta') or '-'}  |  "
-                f"통화: {currency}"
+                f"입고예정: {parsed.get('eta') or '-'}"
             )
 
             # 품목 요약 테이블 (간결하게)
