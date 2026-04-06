@@ -324,186 +324,210 @@ if page == "📊 대시보드":
 # ════════════════════════════════════════════
 elif page == "⬆️ 발주서 업로드":
     st.title("발주서 업로드")
-    st.caption("파일을 업로드하면 AI가 자동으로 분석합니다")
+    st.caption("파일을 올리면 AI가 자동 분석 후 바로 등록합니다  ·  여러 파일도 한번에 가능")
 
     if not API_KEY:
         st.error("Claude API 키가 설정되지 않았습니다. 관리자에게 문의하세요.")
         st.stop()
 
-    uploaded = st.file_uploader(
-        "발주서 파일 선택",
+    uploaded_files = st.file_uploader(
+        "발주서 파일 선택 (여러 개 가능)",
         type=["xlsx", "xls", "csv", "pdf", "jpg", "jpeg", "png", "webp"],
         help="Excel, PDF, 이미지 파일 지원",
+        accept_multiple_files=True,
     )
 
-    if uploaded:
-        st.markdown("#### 업로드된 파일")
-        st.caption(f"{uploaded.name} · {uploaded.size / 1024:.1f} KB")
+    if uploaded_files:
+        # 처리 상태 초기화
+        if "upload_results" not in st.session_state:
+            st.session_state["upload_results"] = {}
 
-        ext = uploaded.name.split(".")[-1].lower()
-        if ext in ("jpg", "jpeg", "png", "webp"):
-            st.image(uploaded, width=400)
-            uploaded.seek(0)
-        elif ext in ("xlsx", "xls", "csv"):
-            try:
-                preview = pd.read_csv(uploaded) if ext == "csv" else pd.read_excel(uploaded)
-                st.dataframe(preview.head(10), use_container_width=True, hide_index=True)
-                uploaded.seek(0)
-            except Exception:
-                uploaded.seek(0)
+        results = st.session_state["upload_results"]
 
-        st.markdown("---")
-        st.markdown("#### AI 분석 결과")
+        # ── 각 파일 자동 분석 + 등록 ──
+        for uploaded in uploaded_files:
+            file_key = f"{uploaded.name}_{uploaded.size}"
 
-        cache_key = f"parsed_{uploaded.name}_{uploaded.size}"
+            # 이미 처리 완료된 파일은 건너뛰기
+            if file_key in results and results[file_key].get("done"):
+                continue
 
-        if cache_key not in st.session_state:
-            st.info("⏳ AI가 발주서를 분석하고 있습니다...")
-            try:
-                uploaded.seek(0)
-                result = parse_file(uploaded, API_KEY)
-                st.session_state[cache_key] = result
-                st.rerun()
-            except Exception as e:
-                st.error(f"분석 오류: {e}")
-                st.session_state[cache_key] = None
+            # 분석 시작
+            if file_key not in results:
+                st.info(f"⏳ **{uploaded.name}** 분석 중...")
+                try:
+                    uploaded.seek(0)
+                    parsed = parse_file(uploaded, API_KEY)
+                    results[file_key] = {"parsed": parsed, "file_name": uploaded.name, "done": False}
+                    st.session_state["upload_results"] = results
+                    st.rerun()
+                except Exception as e:
+                    results[file_key] = {"error": str(e), "file_name": uploaded.name, "done": True}
+                    st.session_state["upload_results"] = results
+                    st.rerun()
 
-        parsed = st.session_state.get(cache_key)
+        # ── 결과 표시 ──
+        has_pending = False
+        for file_key, res in results.items():
+            fname = res.get("file_name", "")
 
-        if parsed:
-            st.success("분석 완료! 내용을 확인하고 수정하세요.")
+            # 오류 발생한 파일
+            if res.get("error"):
+                st.error(f"**{fname}** — 분석 실패: {res['error']}")
+                continue
 
-            # 기본 정보
-            col1, col2, col3, col4 = st.columns(4)
-            with col1:
-                parsed["supplier"] = st.text_input("거래처", value=parsed.get("supplier", ""))
-            with col2:
-                od = parse_date(parsed.get("order_date"))
-                selected_od = st.date_input("발주일", value=od or datetime.now().date())
-                parsed["order_date"] = selected_od.strftime("%Y-%m-%d")
-            with col3:
-                eta = parse_date(parsed.get("eta"))
-                selected_eta = st.date_input("입고예정일", value=eta or None)
-                parsed["eta"] = selected_eta.strftime("%Y-%m-%d") if selected_eta else None
-            with col4:
-                currencies = ["KRW", "CNY", "USD", "JPY"]
-                cur_val = parsed.get("currency", "KRW")
-                cur_idx = currencies.index(cur_val) if cur_val in currencies else 0
-                parsed["currency"] = st.selectbox("통화", currencies, index=cur_idx)
+            # 이미 등록 완료
+            if res.get("done") and res.get("order_id"):
+                st.success(f"**{fname}** → {res.get('order_id')} 등록 완료")
+                continue
 
-            st.markdown("---")
+            # 분석 완료, 등록 대기 중
+            parsed = res.get("parsed")
+            if not parsed:
+                continue
 
-            # ── 품목별 수정 ──
-            st.markdown("#### 품목 상세")
-            st.caption("내부명: 우리 팀에서 부르는 이름으로 수정  ·  메모: 특이사항 기록")
-
+            has_pending = True
             items = parsed.get("items", [])
-            updated_items = []
+            total_qty = sum(i.get("quantity", 0) for i in items)
+            total_amt = parsed.get("total_amount", 0)
+            currency = parsed.get("currency", "KRW")
 
-            for idx, item in enumerate(items):
-                color_label = f" ({item.get('color')})" if item.get("color") else ""
-                with st.expander(f"#{idx + 1}  {item.get('name', '')}{color_label}", expanded=True):
-                    c1, c2, c_color = st.columns([2, 2, 1])
-                    with c1:
-                        original_name = st.text_input(
-                            "원본 제품명",
-                            value=item.get("name", ""),
-                            key=f"name_{idx}",
-                            disabled=True,
-                        )
-                    with c2:
-                        display_name = st.text_input(
-                            "내부 제품명 (수정 가능)",
-                            value=item.get("display_name") or item.get("name", ""),
-                            key=f"display_{idx}",
-                            help="팀원들이 알아볼 수 있는 이름으로 수정하세요",
-                        )
-                    with c_color:
-                        color = st.text_input(
-                            "색상",
-                            value=item.get("color") or "",
-                            key=f"color_{idx}",
-                            placeholder="예: 흑색, 3000K",
-                        )
-
-                    c3, c4, c5 = st.columns(3)
-                    with c3:
-                        qty = st.number_input(
-                            "수량", value=int(item.get("quantity", 0)),
-                            key=f"qty_{idx}", min_value=0,
-                        )
-                    with c4:
-                        price = st.number_input(
-                            "단가", value=float(item.get("unit_price", 0)),
-                            key=f"price_{idx}", min_value=0.0, format="%.2f",
-                        )
-                    with c5:
-                        subtotal = st.number_input(
-                            "소계", value=float(item.get("subtotal", 0)),
-                            key=f"sub_{idx}", min_value=0.0, format="%.2f",
-                        )
-
-                    memo = st.text_input(
-                        "메모",
-                        value=item.get("memo", ""),
-                        key=f"memo_{idx}",
-                        placeholder="예: 색온도 확인 필요, 포장 변경됨 등",
-                    )
-
-                    updated_items.append({
-                        "name": original_name,
-                        "display_name": display_name if display_name != original_name else "",
-                        "color": color,
-                        "quantity": qty,
-                        "unit_price": price,
-                        "subtotal": subtotal,
-                        "memo": memo,
-                    })
-
-            parsed["items"] = updated_items
-            parsed["total_amount"] = sum(i.get("subtotal", 0) for i in updated_items)
-            total_qty = sum(i.get("quantity", 0) for i in updated_items)
-
+            # 요약 카드
             st.markdown("---")
-            st.markdown(f"**합계:** {total_qty:,}개 · {fmt_amount(parsed.get('total_amount'), parsed.get('currency'))}")
+            st.markdown(f"#### {fname}")
 
-            order_notes = st.text_area(
-                "📝 발주 메모",
-                value=parsed.get("notes") or "",
-                placeholder="이 발주 건에 대한 전체 메모를 남기세요...",
-                height=80,
+            sc1, sc2, sc3, sc4 = st.columns(4)
+            sc1.metric("거래처", parsed.get("supplier", "-"))
+            sc2.metric("품목", f"{len(items)}종")
+            sc3.metric("총 수량", f"{total_qty:,}개")
+            sc4.metric("금액", fmt_amount(total_amt, currency))
+
+            st.caption(
+                f"발주일: {parsed.get('order_date', '-')}  |  "
+                f"입고예정: {parsed.get('eta') or '-'}  |  "
+                f"통화: {currency}"
             )
-            parsed["notes"] = order_notes if order_notes else None
 
-            st.markdown("---")
+            # 품목 요약 테이블 (간결하게)
+            rows = []
+            for it in items:
+                name = it.get("name", "")
+                color = it.get("color") or ""
+                show = f"{name} ({color})" if color else name
+                rows.append({
+                    "품목": show,
+                    "수량": it.get("quantity", 0),
+                    "단가": it.get("unit_price", 0),
+                    "소계": it.get("subtotal", 0),
+                })
+            st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
 
-            col_s1, col_s2 = st.columns(2)
-            with col_s1:
-                if st.button("발주 등록", type="primary", use_container_width=True):
+            # 버튼: 바로 등록 / 수정 후 등록
+            btn_col1, btn_col2 = st.columns(2)
+            with btn_col1:
+                if st.button("✅ 바로 등록", key=f"quick_{file_key}", type="primary", use_container_width=True):
+                    order = {
+                        "supplier": parsed.get("supplier", ""),
+                        "order_date": parsed.get("order_date"),
+                        "eta": parsed.get("eta") or None,
+                        "currency": currency,
+                        "items": items,
+                        "total_amount": total_amt,
+                        "status": "확인 대기",
+                        "source_file": fname,
+                        "notes": parsed.get("notes"),
+                    }
+                    order_id = save_order(order)
+                    results[file_key]["done"] = True
+                    results[file_key]["order_id"] = order_id
+                    st.session_state["upload_results"] = results
+                    st.rerun()
+
+            with btn_col2:
+                if st.button("✏️ 수정 후 등록", key=f"detail_{file_key}", use_container_width=True):
+                    st.session_state[f"expand_{file_key}"] = True
+                    st.rerun()
+
+            # ── 수정 모드 (펼침) ──
+            if st.session_state.get(f"expand_{file_key}"):
+                st.markdown("---")
+
+                ec1, ec2, ec3, ec4 = st.columns(4)
+                with ec1:
+                    parsed["supplier"] = st.text_input("거래처", value=parsed.get("supplier", ""), key=f"sup_{file_key}")
+                with ec2:
+                    od = parse_date(parsed.get("order_date"))
+                    sel_od = st.date_input("발주일", value=od or datetime.now().date(), key=f"od_{file_key}")
+                    parsed["order_date"] = sel_od.strftime("%Y-%m-%d")
+                with ec3:
+                    eta_val = parse_date(parsed.get("eta"))
+                    sel_eta = st.date_input("입고예정일", value=eta_val or None, key=f"eta_{file_key}")
+                    parsed["eta"] = sel_eta.strftime("%Y-%m-%d") if sel_eta else None
+                with ec4:
+                    currencies = ["KRW", "CNY", "USD", "JPY"]
+                    cur_idx = currencies.index(currency) if currency in currencies else 0
+                    parsed["currency"] = st.selectbox("통화", currencies, index=cur_idx, key=f"cur_{file_key}")
+
+                # 품목 테이블 (수정 가능)
+                edit_rows = []
+                for it in items:
+                    edit_rows.append({
+                        "원본명": it.get("name", ""),
+                        "색상": it.get("color") or "",
+                        "내부명": it.get("display_name") or "",
+                        "수량": it.get("quantity", 0),
+                        "단가": it.get("unit_price", 0),
+                        "소계": it.get("subtotal", 0),
+                        "메모": it.get("memo", ""),
+                    })
+                edited_df = st.data_editor(
+                    pd.DataFrame(edit_rows),
+                    use_container_width=True,
+                    hide_index=True,
+                    key=f"edit_{file_key}",
+                )
+
+                edit_notes = st.text_input(
+                    "발주 메모", value=parsed.get("notes") or "",
+                    key=f"notes_{file_key}", placeholder="특이사항",
+                )
+
+                if st.button("등록", key=f"save_{file_key}", type="primary", use_container_width=True):
+                    new_items = []
+                    for i, row in edited_df.iterrows():
+                        new_items.append({
+                            "name": row["원본명"],
+                            "color": row["색상"] if row["색상"] else "",
+                            "display_name": row["내부명"] if row["내부명"] else "",
+                            "quantity": row["수량"],
+                            "unit_price": row["단가"],
+                            "subtotal": row["소계"],
+                            "memo": row["메모"] if row["메모"] else "",
+                        })
                     order = {
                         "supplier": parsed["supplier"],
                         "order_date": parsed.get("order_date"),
                         "eta": parsed.get("eta") or None,
                         "currency": parsed.get("currency", "KRW"),
-                        "items": parsed.get("items", []),
-                        "total_amount": parsed.get("total_amount", 0),
+                        "items": new_items,
+                        "total_amount": sum(it["subtotal"] for it in new_items),
                         "status": "확인 대기",
-                        "source_file": uploaded.name,
-                        "notes": parsed.get("notes"),
+                        "source_file": fname,
+                        "notes": edit_notes if edit_notes else None,
                     }
                     order_id = save_order(order)
-                    st.balloons()
-                    st.success(f"등록 완료! 발주번호: **{order_id}**")
-                    del st.session_state[cache_key]
-
-            with col_s2:
-                if st.button("다시 분석", use_container_width=True):
-                    del st.session_state[cache_key]
+                    results[file_key]["done"] = True
+                    results[file_key]["order_id"] = order_id
+                    st.session_state[f"expand_{file_key}"] = False
+                    st.session_state["upload_results"] = results
                     st.rerun()
 
-        elif cache_key in st.session_state and st.session_state[cache_key] is None:
-            if st.button("다시 시도"):
-                del st.session_state[cache_key]
+        # 전체 등록 완료 시 초기화 안내
+        if results and not has_pending:
+            st.markdown("---")
+            st.success("모든 발주서가 등록되었습니다!")
+            if st.button("새 발주서 업로드"):
+                st.session_state["upload_results"] = {}
                 st.rerun()
 
 
