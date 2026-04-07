@@ -1,47 +1,92 @@
 """
 데이터 저장/불러오기 모듈
-JSON 파일 기반으로 발주 데이터를 관리합니다.
+Google Sheets 기반으로 발주 데이터를 영구 저장합니다.
 """
 
 import json
 import threading
-from pathlib import Path
+import streamlit as st
 from datetime import datetime
 from copy import deepcopy
 
-DATA_DIR = Path("data")
-DATA_FILE = DATA_DIR / "orders.json"
+import gspread
+from google.oauth2.service_account import Credentials
+
 _lock = threading.Lock()
+_client = None
+_sheet = None
+
+SCOPES = [
+    "https://www.googleapis.com/auth/spreadsheets",
+    "https://www.googleapis.com/auth/drive",
+]
 
 
-def _ensure():
-    DATA_DIR.mkdir(exist_ok=True)
-    if not DATA_FILE.exists():
-        DATA_FILE.write_text(json.dumps({"orders": [], "next_seq": {}}, ensure_ascii=False))
+def _get_sheet():
+    """Google Sheets 연결 (캐싱)"""
+    global _client, _sheet
+    if _sheet is not None:
+        return _sheet
+
+    # Streamlit Secrets에서 서비스 계정 키 읽기
+    creds_dict = json.loads(st.secrets["GCP_SERVICE_ACCOUNT"])
+    creds = Credentials.from_service_account_info(creds_dict, scopes=SCOPES)
+    _client = gspread.authorize(creds)
+
+    sheet_url = st.secrets.get("GOOGLE_SHEET_URL", "")
+    if sheet_url:
+        spreadsheet = _client.open_by_url(sheet_url)
+    else:
+        sheet_name = st.secrets.get("GOOGLE_SHEET_NAME", "OrderFlow-DB")
+        try:
+            spreadsheet = _client.open(sheet_name)
+        except gspread.SpreadsheetNotFound:
+            spreadsheet = _client.create(sheet_name)
+            spreadsheet.share(None, perm_type="anyone", role="writer")
+
+    # 'orders' 시트 가져오기 (없으면 생성)
+    try:
+        _sheet = spreadsheet.worksheet("orders")
+    except gspread.WorksheetNotFound:
+        _sheet = spreadsheet.add_worksheet(title="orders", rows=1000, cols=2)
+        _sheet.update_cell(1, 1, "id")
+        _sheet.update_cell(1, 2, "data")
+
+    return _sheet
 
 
-def _read_db() -> dict:
-    _ensure()
-    return json.loads(DATA_FILE.read_text(encoding="utf-8"))
+def _read_all_rows() -> list[dict]:
+    """시트에서 모든 발주 데이터를 읽어옵니다."""
+    sheet = _get_sheet()
+    rows = sheet.get_all_values()
+    orders = []
+    for row in rows[1:]:  # 헤더 건너뛰기
+        if len(row) >= 2 and row[0] and row[1]:
+            try:
+                order = json.loads(row[1])
+                orders.append(order)
+            except (json.JSONDecodeError, Exception):
+                continue
+    return orders
 
 
-def _write_db(db: dict):
-    _ensure()
-    DATA_FILE.write_text(json.dumps(db, ensure_ascii=False, indent=2), encoding="utf-8")
+def _find_row(order_id: str) -> int | None:
+    """order_id로 시트의 행 번호 찾기 (1-indexed)"""
+    sheet = _get_sheet()
+    ids = sheet.col_values(1)
+    for i, val in enumerate(ids):
+        if val == order_id:
+            return i + 1  # 1-indexed
+    return None
 
 
 def gen_order_id() -> str:
     with _lock:
-        db = _read_db()
+        orders = _read_all_rows()
         today = datetime.now().strftime("%Y-%m%d")
         prefix = f"PO-{today}"
-        seq_key = prefix
-        if seq_key not in db["next_seq"]:
-            existing = [o for o in db["orders"] if o["id"].startswith(prefix)]
-            db["next_seq"][seq_key] = len(existing) + 1
-        seq = db["next_seq"][seq_key]
-        db["next_seq"][seq_key] = seq + 1
-        _write_db(db)
+        existing = [o for o in orders if o.get("id", "").startswith(prefix)]
+        seq = len(existing) + 1
         return f"{prefix}-{seq:03d}"
 
 
@@ -50,14 +95,18 @@ def save_order(order: dict) -> str:
     order["id"] = order_id
     order["created_at"] = datetime.now().isoformat()
     with _lock:
-        db = _read_db()
-        db["orders"].insert(0, order)
-        _write_db(db)
+        sheet = _get_sheet()
+        sheet.append_row(
+            [order_id, json.dumps(order, ensure_ascii=False)],
+            value_input_option="RAW",
+        )
     return order_id
 
 
 def load_all_orders() -> list[dict]:
-    return _read_db().get("orders", [])
+    orders = _read_all_rows()
+    orders.sort(key=lambda x: x.get("created_at", ""), reverse=True)
+    return orders
 
 
 def load_order(order_id: str) -> dict | None:
@@ -69,32 +118,39 @@ def load_order(order_id: str) -> dict | None:
 
 def update_order_status(order_id: str, new_status: str):
     with _lock:
-        db = _read_db()
-        for o in db["orders"]:
-            if o["id"] == order_id:
-                o["status"] = new_status
-                break
-        _write_db(db)
+        row_num = _find_row(order_id)
+        if row_num is None:
+            return
+        sheet = _get_sheet()
+        data = sheet.cell(row_num, 2).value
+        if data:
+            order = json.loads(data)
+            order["status"] = new_status
+            sheet.update_cell(row_num, 2, json.dumps(order, ensure_ascii=False))
 
 
 def update_order(order_id: str, updated_data: dict):
-    """발주 데이터를 업데이트합니다. (품목명, 메모 등 수정)"""
+    """발주 데이터를 업데이트합니다."""
     with _lock:
-        db = _read_db()
-        for i, o in enumerate(db["orders"]):
-            if o["id"] == order_id:
-                updated_data["id"] = order_id
-                updated_data["created_at"] = o.get("created_at", "")
-                db["orders"][i] = updated_data
-                break
-        _write_db(db)
+        row_num = _find_row(order_id)
+        if row_num is None:
+            return
+        sheet = _get_sheet()
+        data = sheet.cell(row_num, 2).value
+        if data:
+            original = json.loads(data)
+            updated_data["id"] = order_id
+            updated_data["created_at"] = original.get("created_at", "")
+            sheet.update_cell(row_num, 2, json.dumps(updated_data, ensure_ascii=False))
 
 
 def delete_order(order_id: str):
     with _lock:
-        db = _read_db()
-        db["orders"] = [o for o in db["orders"] if o["id"] != order_id]
-        _write_db(db)
+        row_num = _find_row(order_id)
+        if row_num is None:
+            return
+        sheet = _get_sheet()
+        sheet.delete_rows(row_num)
 
 
 def get_stats() -> dict:
@@ -111,20 +167,22 @@ def get_stats() -> dict:
 
 
 def import_orders(data: list[dict]) -> int:
-    """외부 데이터를 병합합니다. 중복 ID는 건너뜁니다."""
+    """외부 데이터를 병합합니다."""
     with _lock:
-        db = _read_db()
-        existing_ids = {o["id"] for o in db["orders"]}
+        existing = {o["id"] for o in _read_all_rows()}
+        sheet = _get_sheet()
         added = 0
         for o in data:
-            if o.get("id") and o["id"] not in existing_ids:
-                db["orders"].append(o)
-                existing_ids.add(o["id"])
+            if o.get("id") and o["id"] not in existing:
+                sheet.append_row(
+                    [o["id"], json.dumps(o, ensure_ascii=False)],
+                    value_input_option="RAW",
+                )
+                existing.add(o["id"])
                 added += 1
-        db["orders"].sort(key=lambda x: x.get("created_at", ""), reverse=True)
-        _write_db(db)
     return added
 
 
 def export_all_json() -> str:
-    return json.dumps(_read_db(), ensure_ascii=False, indent=2)
+    orders = load_all_orders()
+    return json.dumps({"orders": orders}, ensure_ascii=False, indent=2)
