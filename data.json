@@ -1,0 +1,126 @@
+{
+  "orders": [
+    {
+      "supplier": "LANLING HEDU INTERNATIONAL TRADE CO., LTD.",
+      "order_date": "2026-04-28",
+      "eta": "2026-05-06",
+      "currency": "CNY",
+      "items": [
+        {
+          "name": "M15-SL5 Track light",
+          "color": "SILVER NICKEL",
+          "display_name": "",
+          "quantity": 100,
+          "unit_price": 8.416544,
+          "subtotal": 841.654357,
+          "memo": ""
+        },
+        {
+          "name": "SPS-S15 명장궤도",
+          "color": "BK",
+          "display_name": "",
+          "quantity": 100,
+          "unit_price": 3.737075,
+          "subtotal": 373.707533,
+          "memo": ""
+        },
+        {
+          "name": "SPS-S15 명장궤도",
+          "color": "WH",
+          "display_name": "",
+          "quantity": 100,
+          "unit_price": 3.899557,
+          "subtotal": 389.955687,
+          "memo": ""
+        },
+        {
+          "name": "SPS-S15 명장궤도",
+          "color": "SILVER NICKEL",
+          "display_name": "",
+          "quantity": 100,
+          "unit_price": 4.711965,
+          "subtotal": 471.196455,
+          "memo": ""
+        },
+        {
+          "name": "SPS-S15 명장궤도 L2000",
+          "color": "WH",
+          "display_name": "",
+          "quantity": 100,
+          "unit_price": 7.799114,
+          "subtotal": 779.911374,
+          "memo": ""
+        },
+        {
+          "name": "SPS-R15 명장궤도 L1000",
+          "color": "WH",
+          "display_name": "",
+          "quantity": 100,
+          "unit_price": 4.22452,
+          "subtotal": 422.451994,
+          "memo": ""
+        },
+        {
+          "name": "SPS-R15 명장궤도 L2000",
+          "color": "WH",
+          "display_name": "",
+          "quantity": 100,
+          "unit_price": 8.44904,
+          "subtotal": 844.903988,
+          "memo": ""
+        },
+        {
+          "name": "SPS-R15 수평전각 90° corner",
+          "color": "WH",
+          "display_name": "",
+          "quantity": 100,
+          "unit_price": 2.437223,
+          "subtotal": 243.722304,
+          "memo": ""
+        },
+        {
+          "name": "M15 직통모듈 straight module",
+          "color": "SILVER NICKEL",
+          "display_name": "",
+          "quantity": 100,
+          "unit_price": 3.25,
+          "subtotal": 325.0,
+          "memo": ""
+        },
+        {
+          "name": "M15 전각모듈 L Corner",
+          "color": "BK",
+          "display_name": "",
+          "quantity": 100,
+          "unit_price": 4.062014,
+          "subtotal": 406.201397,
+          "memo": ""
+        },
+        {
+          "name": "SPS-R5 암장궤도",
+          "color": "WH",
+          "display_name": "",
+          "quantity": 60,
+          "unit_price": 9.001328,
+          "subtotal": 540.079689,
+          "memo": ""
+        },
+        {
+          "name": "TCT-2P IN 1P TCT직렬용단자",
+          "color": "透明",
+          "display_name": "",
+          "quantity": 5000,
+          "unit_price": 0.081246,
+          "subtotal": 406.230079,
+          "memo": ""
+        }
+      ],
+      "total_amount": 6045.014857,
+      "status": "확인 대기",
+      "source_file": "KANT-2026-4-28 装箱单（铜辰物流）.xlsx",
+      "notes": null,
+      "id": "PO-2026-0429-001",
+      "created_at": "2026-04-29T08:09:56.595626"
+    }
+  ]
+}
