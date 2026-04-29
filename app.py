@@ -119,6 +119,65 @@ def fmt_amount(amt, cur="KRW"):
     return f"{sym}{amt:,.0f}"
 
 
+# ════════════════════════════════════════════
+# 가격 자동 계산 (설정값은 session_state에서 관리)
+# ════════════════════════════════════════════
+DEFAULT_RATES = {"CNY": 220, "USD": 1500, "JPY": 10, "KRW": 1}
+DEFAULT_VENDOR_MULTI = 2
+DEFAULT_ONLINE_MULTI = 3
+DEFAULT_ROUND_UNIT = 100
+
+# session_state에 설정 초기화
+if "exchange_rates" not in st.session_state:
+    st.session_state["exchange_rates"] = dict(DEFAULT_RATES)
+if "vendor_multi" not in st.session_state:
+    st.session_state["vendor_multi"] = DEFAULT_VENDOR_MULTI
+if "online_multi" not in st.session_state:
+    st.session_state["online_multi"] = DEFAULT_ONLINE_MULTI
+if "round_unit" not in st.session_state:
+    st.session_state["round_unit"] = DEFAULT_ROUND_UNIT
+
+
+def get_rates():
+    return st.session_state["exchange_rates"]
+
+def get_vendor_multi():
+    return st.session_state["vendor_multi"]
+
+def get_online_multi():
+    return st.session_state["online_multi"]
+
+def get_round_unit():
+    return st.session_state["round_unit"]
+
+
+def round_price(v, unit=None):
+    """반올림 (단위 설정 반영)"""
+    if unit is None:
+        unit = get_round_unit()
+    return int((v / unit) + 0.5) * unit
+
+
+def calc_prices(unit_price, currency):
+    """외화 단가 → 원단가, 업체가, 온라인가 자동 계산"""
+    rate = get_rates().get(currency, 1)
+    krw = round_price(unit_price * rate)
+    vendor = round_price(krw * get_vendor_multi())
+    online = round_price(krw * get_online_multi())
+    return krw, vendor, online
+
+
+def add_calc_prices(items, currency):
+    """items 리스트에 원단가/업체가/온라인가 필드 추가"""
+    for it in items:
+        price = it.get("unit_price", 0)
+        krw, vendor, online = calc_prices(price, currency)
+        it["krw_price"] = krw
+        it["vendor_price"] = vendor
+        it["online_price"] = online
+    return items
+
+
 def parse_date(s):
     """다양한 날짜 문자열을 date 객체로 변환"""
     if not s:
@@ -295,7 +354,9 @@ if page == "📊 대시보드":
                     f"입고예정: {o.get('eta') or '-'}  |  "
                     f"{total_qty:,}개 · {len(items)}종"
                 )
-                # 품목 테이블
+                # 품목 테이블 (인보이스 변환기 스타일)
+                o_cur = o.get("currency", "KRW")
+                has_img = any(it.get("image") for it in items)
                 rows = []
                 for it in items:
                     display = it.get("display_name") or ""
@@ -304,16 +365,28 @@ if page == "📊 대시보드":
                     color = it.get("color") or ""
                     if color:
                         show_name = f"{show_name} ({color})"
-                    memo = it.get("memo", "")
-                    rows.append({
-                        "품목": show_name,
-                        "수량": it.get("quantity", 0),
-                        "단가": it.get("unit_price", 0),
-                        "소계": it.get("subtotal", 0),
-                        "메모": memo,
-                    })
+                    if it.get("krw_price"):
+                        krw = it["krw_price"]
+                        vendor = it["vendor_price"]
+                        online = it["online_price"]
+                    else:
+                        krw, vendor, online = calc_prices(it.get("unit_price", 0), o_cur)
+                    qty = it.get("quantity", 0)
+                    row = {}
+                    if has_img:
+                        row["이미지"] = it.get("image") or ""
+                    row["제품명"] = show_name
+                    row["수량"] = qty
+                    row["단가"] = f"₩{krw:,.0f}"
+                    row["업체가"] = f"₩{vendor:,.0f}"
+                    row["온라인가"] = f"₩{online:,.0f}"
+                    row["총금액"] = f"₩{qty * krw:,.0f}"
+                    rows.append(row)
                 df = pd.DataFrame(rows)
-                st.dataframe(df, use_container_width=True, hide_index=True)
+                dash_col_config = {}
+                if has_img:
+                    dash_col_config["이미지"] = st.column_config.ImageColumn("이미지", width="small")
+                st.dataframe(df, use_container_width=True, hide_index=True, column_config=dash_col_config)
 
                 if o.get("notes"):
                     st.info(f"📝 {o['notes']}")
@@ -388,20 +461,27 @@ elif page == "⬆️ 발주서 업로드":
 
             has_pending = True
             items = parsed.get("items", [])
-            total_qty = sum(i.get("quantity", 0) for i in items)
-            total_amt = parsed.get("total_amount", 0)
             currency = parsed.get("currency", "KRW")
+            # 가격 자동 계산
+            items = add_calc_prices(items, currency)
+
+            total_qty = sum(i.get("quantity", 0) for i in items)
+            total_krw = sum(i.get("quantity", 0) * i.get("krw_price", 0) for i in items)
+            img_count = sum(1 for i in items if i.get("image"))
 
             # 요약 카드
             st.markdown("---")
             st.markdown(f"#### {fname}")
 
-            sc1, sc2, sc3, sc4, sc5 = st.columns([2, 1, 1, 1, 1])
-            sc1.metric("거래처", parsed.get("supplier", "-"))
-            sc2.metric("품목", f"{len(items)}종")
-            sc3.metric("총 수량", f"{total_qty:,}개")
-            sc4.metric("금액", fmt_amount(total_amt, currency))
-            with sc5:
+            # 거래처 + 통화 선택
+            info1, info2 = st.columns([3, 1])
+            with info1:
+                st.caption(
+                    f"거래처: **{parsed.get('supplier', '-')}**  |  "
+                    f"발주일: {parsed.get('order_date', '-')}  |  "
+                    f"입고예정: {parsed.get('eta') or '-'}"
+                )
+            with info2:
                 currencies = ["KRW", "CNY", "USD", "JPY"]
                 cur_idx = currencies.index(currency) if currency in currencies else 0
                 selected_cur = st.selectbox(
@@ -410,36 +490,57 @@ elif page == "⬆️ 발주서 업로드":
                 )
                 parsed["currency"] = selected_cur
                 currency = selected_cur
+                # 통화 변경 시 재계산
+                if selected_cur != currency:
+                    items = add_calc_prices(items, selected_cur)
 
-            st.caption(
-                f"발주일: {parsed.get('order_date', '-')}  |  "
-                f"입고예정: {parsed.get('eta') or '-'}"
-            )
+            # 통계 바 (인보이스 변환기 스타일)
+            st1, st2, st3, st4 = st.columns(4)
+            st1.metric("총 품목", f"{len(items)}")
+            st2.metric("총 수량", f"{total_qty:,}")
+            st3.metric("총 금액", f"₩{total_krw:,.0f}")
+            st4.metric("이미지", f"{img_count}")
 
-            # 품목 요약 테이블 (간결하게)
+            # 환율 정보
+            rate = get_rates().get(currency, 1)
+            if currency != "KRW":
+                st.caption(f"💱 환율: 1 {currency} = {rate:,.0f}원  |  원단가 ×{get_vendor_multi()} = 업체가  |  원단가 ×{get_online_multi()} = 온라인가")
+
+            # 품목 테이블 (인보이스 변환기 스타일: 이미지, 제품명, 수량, 단가, 업체가, 온라인가, 총금액)
+            has_images = any(it.get("image") for it in items)
             rows = []
             for it in items:
                 name = it.get("name", "")
                 color = it.get("color") or ""
                 show = f"{name} ({color})" if color else name
-                rows.append({
-                    "품목": show,
-                    "수량": it.get("quantity", 0),
-                    "단가": it.get("unit_price", 0),
-                    "소계": it.get("subtotal", 0),
-                })
-            st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+                qty = it.get("quantity", 0)
+                krw = it.get("krw_price", 0)
+                row = {}
+                if has_images:
+                    row["이미지"] = it.get("image") or ""
+                row["제품명"] = show
+                row["수량"] = qty
+                row["단가"] = f"₩{krw:,.0f}"
+                row["업체가"] = f"₩{it.get('vendor_price', 0):,.0f}"
+                row["온라인가"] = f"₩{it.get('online_price', 0):,.0f}"
+                row["총금액"] = f"₩{qty * krw:,.0f}"
+                rows.append(row)
+            col_config = {}
+            if has_images:
+                col_config["이미지"] = st.column_config.ImageColumn("이미지", width="small")
+            st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True, column_config=col_config)
 
             # 버튼: 바로 등록 / 수정 후 등록
             btn_col1, btn_col2 = st.columns(2)
             with btn_col1:
                 if st.button("✅ 바로 등록", key=f"quick_{file_key}", type="primary", use_container_width=True):
+                    save_items = add_calc_prices(items, currency)
                     order = {
                         "supplier": parsed.get("supplier", ""),
                         "order_date": parsed.get("order_date"),
                         "eta": parsed.get("eta") or None,
                         "currency": currency,
-                        "items": items,
+                        "items": save_items,
                         "total_amount": total_amt,
                         "status": "확인 대기",
                         "source_file": fname,
@@ -476,22 +577,28 @@ elif page == "⬆️ 발주서 업로드":
                     cur_idx = currencies.index(currency) if currency in currencies else 0
                     parsed["currency"] = st.selectbox("통화", currencies, index=cur_idx, key=f"cur_{file_key}")
 
-                # 품목 테이블 (수정 가능)
+                # 품목 테이블 (수정 가능 + 가격 계산)
+                edit_cur = parsed.get("currency", "KRW")
+                edit_items = add_calc_prices(items, edit_cur)
                 edit_rows = []
-                for it in items:
-                    edit_rows.append({
+                for it in edit_items:
+                    row = {
                         "원본명": it.get("name", ""),
                         "색상": it.get("color") or "",
                         "내부명": it.get("display_name") or "",
                         "수량": it.get("quantity", 0),
-                        "단가": it.get("unit_price", 0),
-                        "소계": it.get("subtotal", 0),
+                        f"단가({edit_cur})": it.get("unit_price", 0),
+                        "원단가(₩)": it.get("krw_price", 0),
+                        "업체가(₩)": it.get("vendor_price", 0),
+                        "온라인가(₩)": it.get("online_price", 0),
                         "메모": it.get("memo", ""),
-                    })
+                    }
+                    edit_rows.append(row)
                 edited_df = st.data_editor(
                     pd.DataFrame(edit_rows),
                     use_container_width=True,
                     hide_index=True,
+                    disabled=["원단가(₩)", "업체가(₩)", "온라인가(₩)"],
                     key=f"edit_{file_key}",
                 )
 
@@ -501,22 +608,33 @@ elif page == "⬆️ 발주서 업로드":
                 )
 
                 if st.button("등록", key=f"save_{file_key}", type="primary", use_container_width=True):
+                    save_cur = parsed.get("currency", "KRW")
+                    price_col = f"단가({save_cur})"
                     new_items = []
                     for i, row in edited_df.iterrows():
-                        new_items.append({
+                        up = row.get(price_col, 0)
+                        krw, vendor, online = calc_prices(up, save_cur)
+                        item_dict = {
                             "name": row["원본명"],
                             "color": row["색상"] if row["색상"] else "",
                             "display_name": row["내부명"] if row["내부명"] else "",
                             "quantity": row["수량"],
-                            "unit_price": row["단가"],
-                            "subtotal": row["소계"],
+                            "unit_price": up,
+                            "subtotal": row["수량"] * up,
+                            "krw_price": krw,
+                            "vendor_price": vendor,
+                            "online_price": online,
                             "memo": row["메모"] if row["메모"] else "",
-                        })
+                        }
+                        # 이미지 유지
+                        if i < len(items) and items[i].get("image"):
+                            item_dict["image"] = items[i]["image"]
+                        new_items.append(item_dict)
                     order = {
                         "supplier": parsed["supplier"],
                         "order_date": parsed.get("order_date"),
                         "eta": parsed.get("eta") or None,
-                        "currency": parsed.get("currency", "KRW"),
+                        "currency": save_cur,
                         "items": new_items,
                         "total_amount": sum(it["subtotal"] for it in new_items),
                         "status": "확인 대기",
@@ -610,35 +728,57 @@ elif page == "📋 발주 목록":
 
             st.markdown("---")
 
-            # ── 품목 테이블 (전체 수정 가능) ──
+            # ── 품목 테이블 (전체 수정 가능 + 가격 계산) ──
             if items:
+                o_cur = o.get("currency", "KRW")
+                rate = get_rates().get(o_cur, 1)
+                if o_cur != "KRW":
+                    st.caption(f"💱 환율: 1 {o_cur} = {rate:,.0f}원  |  원단가 ×{get_vendor_multi()} = 업체가  |  원단가 ×{get_online_multi()} = 온라인가")
                 st.markdown("**품목 상세**")
 
+                has_img_list = any(it.get("image") for it in items)
                 items_data = []
                 for it in items:
-                    items_data.append({
-                        "원본명": it.get("name", ""),
-                        "색상": it.get("color") or "",
-                        "내부명": it.get("display_name") or "",
-                        "수량": it.get("quantity", 0),
-                        "단가": it.get("unit_price", 0),
-                        "소계": it.get("subtotal", 0),
-                        "메모": it.get("memo", ""),
-                    })
+                    if it.get("krw_price"):
+                        krw, vendor, online = it["krw_price"], it["vendor_price"], it["online_price"]
+                    else:
+                        krw, vendor, online = calc_prices(it.get("unit_price", 0), o_cur)
+                    row = {}
+                    if has_img_list:
+                        row["이미지"] = it.get("image") or ""
+                    row["원본명"] = it.get("name", "")
+                    row["색상"] = it.get("color") or ""
+                    row["내부명"] = it.get("display_name") or ""
+                    row["수량"] = it.get("quantity", 0)
+                    row[f"단가({o_cur})"] = it.get("unit_price", 0)
+                    row["원단가(₩)"] = krw
+                    row["업체가(₩)"] = vendor
+                    row["온라인가(₩)"] = online
+                    row["메모"] = it.get("memo", "")
+                    items_data.append(row)
+
+                edit_col_config = {
+                    "원본명": st.column_config.TextColumn("원본명", width="medium"),
+                    "색상": st.column_config.TextColumn("색상", width="small"),
+                    "내부명": st.column_config.TextColumn("내부명", width="medium"),
+                    "수량": st.column_config.NumberColumn("수량", format="%.0f"),
+                    f"단가({o_cur})": st.column_config.NumberColumn(f"단가({o_cur})", format="%.2f"),
+                    "원단가(₩)": st.column_config.NumberColumn("원단가(₩)", format="%d"),
+                    "업체가(₩)": st.column_config.NumberColumn("업체가(₩)", format="%d"),
+                    "온라인가(₩)": st.column_config.NumberColumn("온라인가(₩)", format="%d"),
+                    "메모": st.column_config.TextColumn("메모", width="medium"),
+                }
+                disabled_cols = ["원단가(₩)", "업체가(₩)", "온라인가(₩)"]
+                if has_img_list:
+                    edit_col_config["이미지"] = st.column_config.ImageColumn("이미지", width="small")
+                    disabled_cols.append("이미지")
 
                 edited = st.data_editor(
                     pd.DataFrame(items_data),
                     use_container_width=True,
                     hide_index=True,
-                    column_config={
-                        "원본명": st.column_config.TextColumn("원본명", width="medium"),
-                        "색상": st.column_config.TextColumn("색상", width="small"),
-                        "내부명": st.column_config.TextColumn("내부명", width="medium", help="팀원들이 알아볼 수 있는 이름"),
-                        "수량": st.column_config.NumberColumn("수량", format="%.0f"),
-                        "단가": st.column_config.NumberColumn("단가", format="%.2f"),
-                        "소계": st.column_config.NumberColumn("소계", format="%.2f"),
-                        "메모": st.column_config.TextColumn("메모", width="medium"),
-                    },
+                    disabled=disabled_cols,
+                    column_config=edit_col_config,
                     key=f"edit_{oid}",
                 )
 
@@ -648,19 +788,30 @@ elif page == "📋 발주 목록":
             save_col, del_col = st.columns([3, 1])
             with save_col:
                 if st.button("💾 저장", key=f"save_all_{oid}", type="primary", use_container_width=True):
-                    # 품목 데이터 수집
+                    # 품목 데이터 수집 + 가격 재계산
+                    save_cur = o.get("currency", "KRW")
+                    price_col = f"단가({save_cur})"
                     new_items = []
                     if items:
                         for i, row in edited.iterrows():
-                            new_items.append({
+                            up = row.get(price_col, 0)
+                            krw, vendor, online = calc_prices(up, save_cur)
+                            item_dict = {
                                 "name": row["원본명"],
                                 "color": row["색상"] if row["색상"] else "",
                                 "display_name": row["내부명"] if row["내부명"] else "",
                                 "quantity": row["수량"],
-                                "unit_price": row["단가"],
-                                "subtotal": row["소계"],
+                                "unit_price": up,
+                                "subtotal": row["수량"] * up,
+                                "krw_price": krw,
+                                "vendor_price": vendor,
+                                "online_price": online,
                                 "memo": row["메모"] if row["메모"] else "",
-                            })
+                            }
+                            # 기존 이미지 유지
+                            if i < len(items) and items[i].get("image"):
+                                item_dict["image"] = items[i]["image"]
+                            new_items.append(item_dict)
                     # 전체 주문 업데이트
                     o_copy = dict(o)
                     o_copy["supplier"] = edit_supplier
@@ -694,15 +845,22 @@ elif page == "📋 발주 목록":
                 "총금액": o.get("total_amount"),
                 "상태": o.get("status"),
             })
+            o_cur = o.get("currency", "KRW")
             for i in o.get("items", []):
+                if i.get("krw_price"):
+                    krw, vendor, online = i["krw_price"], i["vendor_price"], i["online_price"]
+                else:
+                    krw, vendor, online = calc_prices(i.get("unit_price", 0), o_cur)
                 all_items_data.append({
                     "발주번호": o["id"],
                     "원본명": i.get("name"),
                     "색상": i.get("color") or "",
                     "내부명": i.get("display_name") or "",
                     "수량": i.get("quantity"),
-                    "단가": i.get("unit_price"),
-                    "소계": i.get("subtotal"),
+                    f"단가({o_cur})": i.get("unit_price"),
+                    "원단가(₩)": krw,
+                    "업체가(₩)": vendor,
+                    "온라인가(₩)": online,
                     "메모": i.get("memo", ""),
                 })
 
@@ -732,6 +890,45 @@ elif page == "🔧 관리":
         st.caption("Streamlit Cloud Secrets에서 관리됩니다.")
     else:
         st.error("API 키 미설정")
+
+    st.markdown("---")
+    st.markdown("#### 💱 가격 계산 설정")
+    st.caption("환율, 배수, 반올림 단위를 조정하면 모든 페이지에 즉시 반영됩니다.")
+
+    rates = get_rates()
+    rc1, rc2, rc3 = st.columns(3)
+    with rc1:
+        new_cny = st.number_input("CNY (위안) 환율", value=float(rates.get("CNY", 220)), step=10.0, format="%.0f", key="set_cny")
+    with rc2:
+        new_usd = st.number_input("USD (달러) 환율", value=float(rates.get("USD", 1500)), step=50.0, format="%.0f", key="set_usd")
+    with rc3:
+        new_jpy = st.number_input("JPY (엔) 환율", value=float(rates.get("JPY", 10)), step=1.0, format="%.0f", key="set_jpy")
+
+    mc1, mc2, mc3 = st.columns(3)
+    with mc1:
+        new_vendor = st.number_input("업체가 배수", value=float(get_vendor_multi()), step=0.1, format="%.1f", key="set_vendor")
+    with mc2:
+        new_online = st.number_input("온라인가 배수", value=float(get_online_multi()), step=0.1, format="%.1f", key="set_online")
+    with mc3:
+        round_options = {100: "100원 단위", 10: "10원 단위", 1000: "1,000원 단위"}
+        current_round = get_round_unit()
+        round_keys = list(round_options.keys())
+        new_round = st.selectbox(
+            "반올림 단위",
+            round_keys,
+            index=round_keys.index(current_round) if current_round in round_keys else 0,
+            format_func=lambda x: round_options[x],
+            key="set_round",
+        )
+
+    if st.button("설정 저장", key="save_settings", type="primary", use_container_width=True):
+        st.session_state["exchange_rates"] = {"CNY": new_cny, "USD": new_usd, "JPY": new_jpy, "KRW": 1}
+        st.session_state["vendor_multi"] = new_vendor
+        st.session_state["online_multi"] = new_online
+        st.session_state["round_unit"] = new_round
+        st.success("설정이 저장되었습니다!")
+
+    st.caption(f"현재 설정 — CNY ×{rates.get('CNY', 220):.0f} | USD ×{rates.get('USD', 1500):.0f} | JPY ×{rates.get('JPY', 10):.0f} | 업체가 ×{get_vendor_multi()} | 온라인가 ×{get_online_multi()} | {round_options.get(get_round_unit(), '100원 단위')}")
 
     st.markdown("---")
     st.markdown("#### 데이터 백업")
