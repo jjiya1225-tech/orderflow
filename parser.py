@@ -6,6 +6,8 @@ import json
 import re
 import base64
 import io
+import zipfile
+from xml.etree import ElementTree as ET
 import anthropic
 import pandas as pd
 
@@ -47,7 +49,12 @@ def parse_file(uploaded_file, api_key: str) -> dict:
 
     if file_name.endswith((".xlsx", ".xls")):
         content = _read_excel(file_bytes)
-        return _call_claude(content, "text", api_key)
+        result = _call_claude(content, "text", api_key)
+        # 엑셀 이미지 추출 후 items에 매핑
+        images = extract_excel_images(file_bytes)
+        if images and result.get("items"):
+            _attach_images(result, images)
+        return result
 
     elif file_name.endswith(".csv"):
         content = pd.read_csv(io.BytesIO(file_bytes)).to_string(index=False)
@@ -65,6 +72,19 @@ def parse_file(uploaded_file, api_key: str) -> dict:
 
     else:
         raise ValueError(f"지원하지 않는 파일 형식: {uploaded_file.name}")
+
+
+def _attach_images(result: dict, images: dict[int, str]):
+    """추출된 이미지를 파싱 결과의 items에 행 순서로 매핑합니다."""
+    items = result.get("items", [])
+    if not items or not images:
+        return
+    # 이미지가 있는 행 번호를 정렬
+    sorted_rows = sorted(images.keys())
+    # items 수와 이미지 수 중 작은 쪽까지 매핑
+    for i, row in enumerate(sorted_rows):
+        if i < len(items):
+            items[i]["image"] = images[row]
 
 
 def _read_excel(file_bytes: bytes) -> str:
@@ -104,6 +124,76 @@ def _read_excel(file_bytes: bytes) -> str:
 
     combined = "\n\n".join(parts)
     return _truncate(combined)
+
+
+def extract_excel_images(file_bytes: bytes) -> dict[int, str]:
+    """엑셀 파일에서 행별 이미지를 추출합니다.
+    Returns: {row_index: "data:image/png;base64,..."} 형태의 딕셔너리
+    """
+    images = {}
+    try:
+        with zipfile.ZipFile(io.BytesIO(file_bytes)) as zf:
+            # 1) drawing rels에서 rId → 이미지 파일 경로 매핑
+            rels_path = "xl/drawings/_rels/drawing1.xml.rels"
+            if rels_path not in zf.namelist():
+                return images
+
+            rels_xml = zf.read(rels_path).decode("utf-8")
+            rels_tree = ET.fromstring(rels_xml)
+            rid_to_file = {}
+            for rel in rels_tree:
+                rel_type = rel.get("Type", "")
+                if "image" in rel_type:
+                    target = rel.get("Target", "").replace("../", "xl/")
+                    rid_to_file[rel.get("Id")] = target
+
+            # 2) drawing1.xml에서 행 번호 → rId 매핑
+            drawing_path = "xl/drawings/drawing1.xml"
+            if drawing_path not in zf.namelist():
+                return images
+
+            draw_xml = zf.read(drawing_path).decode("utf-8")
+            draw_tree = ET.fromstring(draw_xml)
+
+            ns = {
+                "xdr": "http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing",
+                "a": "http://schemas.openxmlformats.org/drawingml/2006/main",
+                "r": "http://schemas.openxmlformats.org/officeDocument/2006/relationships",
+            }
+
+            row_to_file = {}
+            # twoCellAnchor + oneCellAnchor 모두 처리
+            for anchor_tag in ["xdr:twoCellAnchor", "xdr:oneCellAnchor"]:
+                for anchor in draw_tree.findall(anchor_tag, ns):
+                    from_el = anchor.find("xdr:from", ns)
+                    if from_el is None:
+                        continue
+                    row_el = from_el.find("xdr:row", ns)
+                    if row_el is None:
+                        continue
+                    row = int(row_el.text)
+
+                    blip = anchor.find(".//a:blip", ns)
+                    if blip is None:
+                        continue
+                    rid = blip.get(f"{{{ns['r']}}}embed")
+                    if rid and rid in rid_to_file and row not in row_to_file:
+                        row_to_file[row] = rid_to_file[rid]
+
+            # 3) 이미지 파일을 base64로 읽기
+            for row, file_path in row_to_file.items():
+                if file_path in zf.namelist():
+                    img_data = zf.read(file_path)
+                    ext = file_path.rsplit(".", 1)[-1].lower()
+                    if ext == "jpg":
+                        ext = "jpeg"
+                    b64 = base64.b64encode(img_data).decode("utf-8")
+                    images[row] = f"data:image/{ext};base64,{b64}"
+
+    except Exception:
+        pass  # 이미지 추출 실패해도 데이터 파싱은 계속
+
+    return images
 
 
 def _truncate(text: str) -> str:
