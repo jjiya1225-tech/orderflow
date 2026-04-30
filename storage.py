@@ -62,6 +62,15 @@ def _write_remote(orders: list[dict]):
     content_str = json.dumps({"orders": orders}, ensure_ascii=False, indent=2)
     encoded = base64.b64encode(content_str.encode("utf-8")).decode("utf-8")
 
+    # SHA가 없으면 원격에서 최신 SHA를 가져옴 (파일이 이미 존재할 수 있음)
+    if not _cache_sha:
+        try:
+            r_get = requests.get(_gh_url(), headers=_gh_headers(), timeout=15)
+            if r_get.status_code == 200:
+                _cache_sha = r_get.json().get("sha")
+        except Exception:
+            pass
+
     body = {
         "message": f"Update orders ({datetime.now().strftime('%Y-%m-%d %H:%M')})",
         "content": encoded,
