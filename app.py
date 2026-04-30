@@ -243,17 +243,27 @@ if page == "📊 대시보드":
         # ── 입고 캘린더 ──
         st.subheader("📅 입고 캘린더")
 
-        cal_col1, cal_col2 = st.columns([3, 1])
-        with cal_col2:
-            month_offset = st.selectbox(
-                "월 선택",
-                [0, 1, 2],
-                format_func=lambda x: (now + timedelta(days=30 * x)).strftime("%Y년 %m월"),
-                label_visibility="collapsed",
-            )
+        if "cal_month_offset" not in st.session_state:
+            st.session_state["cal_month_offset"] = 0
 
-        target_date = now + timedelta(days=30 * month_offset)
-        year, month = target_date.year, target_date.month
+        nav_left, nav_center, nav_right = st.columns([1, 2, 1])
+        with nav_left:
+            if st.button("◀ 이전", key="cal_prev", use_container_width=True):
+                st.session_state["cal_month_offset"] -= 1
+                st.rerun()
+        with nav_right:
+            if st.button("다음 ▶", key="cal_next", use_container_width=True):
+                st.session_state["cal_month_offset"] += 1
+                st.rerun()
+
+        month_offset = st.session_state["cal_month_offset"]
+        # 월 오프셋으로 정확한 연/월 계산
+        total_months = now.year * 12 + (now.month - 1) + month_offset
+        year = total_months // 12
+        month = total_months % 12 + 1
+
+        with nav_center:
+            st.markdown(f"<h3 style='text-align:center; margin:0;'>{year}년 {month}월</h3>", unsafe_allow_html=True)
         first_weekday, num_days = monthrange(year, month)
 
         # 해당 월 입고 예정 수집
@@ -293,8 +303,7 @@ if page == "📊 대시보드":
             cal_html += f'<div class="{cls}">{day}{dot}</div>'
         cal_html += "</div>"
 
-        with cal_col1:
-            st.markdown(cal_html, unsafe_allow_html=True)
+        st.markdown(cal_html, unsafe_allow_html=True)
 
         # ── 입고 예정 리스트 (Streamlit 네이티브) ──
         if eta_map:
