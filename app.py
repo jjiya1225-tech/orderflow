@@ -1,10 +1,12 @@
 """
-OrderFlow - AI 발주 관리 시스템 v3
-팀원 중심 UI: 입고일 · 품목 · 수량
+OrderFlow - AI 발주 관리 시스템 v4
+발주서/인보이스 구분 · 연결 건 그룹화 · 휠 캘린더
 """
 
 import streamlit as st
+import streamlit.components.v1 as components
 import pandas as pd
+import json as _json
 from datetime import datetime, timedelta
 from io import BytesIO
 from calendar import monthrange
@@ -19,7 +21,7 @@ st.set_page_config(page_title="OrderFlow", page_icon="📦", layout="wide", init
 API_KEY = st.secrets.get("ANTHROPIC_API_KEY", "")
 
 # ════════════════════════════════════════════
-# CSS (간결하게)
+# CSS
 # ════════════════════════════════════════════
 st.markdown("""
 <style>
@@ -76,38 +78,43 @@ div[data-testid="stExpander"] {
     background: white;
 }
 
-/* 캘린더 */
-.cal-grid {
-    display: grid;
-    grid-template-columns: repeat(7, 1fr);
-    gap: 2px;
-    margin-top: 8px;
-}
-.cal-header {
-    text-align: center;
+/* 유형 뱃지 */
+.badge-po {
+    display: inline-block;
+    background: #dbeafe;
+    color: #1d4ed8;
     font-size: 11px;
     font-weight: 600;
-    color: #86868b;
-    padding: 8px 0;
+    padding: 2px 8px;
+    border-radius: 6px;
+    margin-right: 4px;
 }
-.cal-day {
-    text-align: center;
-    padding: 8px 4px;
-    border-radius: 10px;
-    font-size: 13px;
-    min-height: 44px;
+.badge-inv {
+    display: inline-block;
+    background: #fef3c7;
+    color: #92400e;
+    font-size: 11px;
+    font-weight: 600;
+    padding: 2px 8px;
+    border-radius: 6px;
+    margin-right: 4px;
 }
-.cal-day.today { background: #f5f5f7; font-weight: 700; }
-.cal-day.has-order { background: #e8f4fd; }
-.cal-day.has-order.urgent { background: #fff5f5; }
-.cal-dot {
-    width: 6px; height: 6px;
-    border-radius: 50%;
-    background: #0071e3;
-    margin: 4px auto 0;
+.group-divider {
+    border-top: 1px dashed #e5e7eb;
+    margin: 12px 0;
+    position: relative;
 }
-.cal-day.urgent .cal-dot { background: #e53e3e; }
-.cal-day.empty { color: #d2d2d7; }
+.group-divider::after {
+    content: '🔗 연결';
+    position: absolute;
+    top: -10px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: white;
+    padding: 0 8px;
+    font-size: 11px;
+    color: #9ca3af;
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -119,15 +126,41 @@ def fmt_amount(amt, cur="KRW"):
     return f"{sym}{amt:,.0f}"
 
 
+def date_label(doc_type, field):
+    """doc_type에 따라 날짜 라벨 반환"""
+    if doc_type == "인보이스":
+        return {"order_date": "출고일", "eta": "도착예정일"}.get(field, field)
+    return {"order_date": "발주일", "eta": "입고예정일"}.get(field, field)
+
+
+def group_orders(orders):
+    """연결된 발주서-인보이스를 묶어서 그룹화"""
+    shown = set()
+    groups = []
+    order_map = {o["id"]: o for o in orders}
+    for o in orders:
+        if o["id"] in shown:
+            continue
+        shown.add(o["id"])
+        group = [o]
+        linked_id = o.get("linked_id")
+        if linked_id and linked_id in order_map and linked_id not in shown:
+            group.append(order_map[linked_id])
+            shown.add(linked_id)
+        # 발주서를 앞에, 인보이스를 뒤에
+        group.sort(key=lambda x: 0 if x.get("doc_type") == "발주서" else 1)
+        groups.append(group)
+    return groups
+
+
 # ════════════════════════════════════════════
-# 가격 자동 계산 (설정값은 session_state에서 관리)
+# 가격 자동 계산
 # ════════════════════════════════════════════
 DEFAULT_RATES = {"CNY": 220, "USD": 1500, "JPY": 10, "KRW": 1}
 DEFAULT_VENDOR_MULTI = 2
 DEFAULT_ONLINE_MULTI = 3
 DEFAULT_ROUND_UNIT = 100
 
-# session_state에 설정 초기화
 if "exchange_rates" not in st.session_state:
     st.session_state["exchange_rates"] = dict(DEFAULT_RATES)
 if "vendor_multi" not in st.session_state:
@@ -152,14 +185,12 @@ def get_round_unit():
 
 
 def round_price(v, unit=None):
-    """반올림 (단위 설정 반영)"""
     if unit is None:
         unit = get_round_unit()
     return int((v / unit) + 0.5) * unit
 
 
 def calc_prices(unit_price, currency):
-    """외화 단가 → 원단가, 업체가, 온라인가 자동 계산"""
     try:
         unit_price = float(unit_price or 0)
     except (TypeError, ValueError):
@@ -172,7 +203,6 @@ def calc_prices(unit_price, currency):
 
 
 def add_calc_prices(items, currency):
-    """items 리스트에 원단가/업체가/온라인가 필드 추가"""
     for it in items:
         raw_price = it.get("unit_price", 0)
         try:
@@ -187,7 +217,6 @@ def add_calc_prices(items, currency):
 
 
 def parse_date(s):
-    """다양한 날짜 문자열을 date 객체로 변환"""
     if not s:
         return None
     if isinstance(s, datetime):
@@ -202,6 +231,254 @@ def parse_date(s):
         except ValueError:
             continue
     return None
+
+
+def render_order_items_table(items, currency, show_images=True):
+    """품목 테이블 렌더링 (공통)"""
+    has_img = show_images and any(it.get("image") for it in items)
+    rows = []
+    for it in items:
+        display = it.get("display_name") or ""
+        name = it.get("name", "")
+        show_name = display if display else name
+        color = it.get("color") or ""
+        if color:
+            show_name = f"{show_name} ({color})"
+        if it.get("krw_price"):
+            krw = it["krw_price"]
+            vendor = it["vendor_price"]
+            online = it["online_price"]
+        else:
+            krw, vendor, online = calc_prices(it.get("unit_price", 0), currency)
+        qty = it.get("quantity", 0)
+        row = {}
+        if has_img:
+            row["이미지"] = it.get("image") or ""
+        row["제품명"] = show_name
+        row["수량"] = qty
+        row["단가"] = f"₩{krw:,.0f}"
+        row["업체가"] = f"₩{vendor:,.0f}"
+        row["온라인가"] = f"₩{online:,.0f}"
+        row["총금액"] = f"₩{qty * krw:,.0f}"
+        rows.append(row)
+    df = pd.DataFrame(rows)
+    col_config = {}
+    if has_img:
+        col_config["이미지"] = st.column_config.ImageColumn("이미지", width="small")
+    st.dataframe(df, use_container_width=True, hide_index=True, column_config=col_config)
+
+
+def render_order_card(o, compact=False):
+    """단일 주문 카드 렌더링 (대시보드용)"""
+    doc_type = o.get("doc_type", "발주서")
+    badge_cls = "badge-po" if doc_type == "발주서" else "badge-inv"
+    items = o.get("items", [])
+    total_qty = sum(i.get("quantity", 0) for i in items)
+    o_cur = o.get("currency", "KRW")
+
+    st.markdown(f'<span class="{badge_cls}">{doc_type}</span> **{o["id"]}**', unsafe_allow_html=True)
+
+    # 날짜 라벨 (doc_type에 따라)
+    od_label = date_label(doc_type, "order_date")
+    eta_label = date_label(doc_type, "eta")
+    if doc_type == "발주서":
+        st.caption(f"{od_label}: {o.get('order_date', '-')}  |  {total_qty:,}개 · {len(items)}종")
+    else:
+        st.caption(
+            f"{od_label}: {o.get('order_date', '-')}  |  "
+            f"{eta_label}: {o.get('eta') or '-'}  |  "
+            f"{total_qty:,}개 · {len(items)}종"
+        )
+
+    if not compact:
+        render_order_items_table(items, o_cur)
+        if o.get("notes"):
+            st.info(f"📝 {o['notes']}")
+
+
+# ════════════════════════════════════════════
+# 캘린더 JS 컴포넌트 (휠 스크롤)
+# ════════════════════════════════════════════
+def render_wheel_calendar(orders):
+    """애플 캘린더 스타일 휠 스크롤 캘린더"""
+    now = datetime.now()
+
+    # 모든 ETA 데이터 수집 (날짜별 건수 + 지연 여부)
+    eta_data = {}
+    for o in orders:
+        if o.get("eta") and o.get("status") != "입고 완료":
+            eta_str = o["eta"]
+            if eta_str not in eta_data:
+                eta_data[eta_str] = 0
+            eta_data[eta_str] += 1
+
+    eta_json = _json.dumps(eta_data, ensure_ascii=False)
+    today_str = now.strftime("%Y-%m-%d")
+
+    cal_html = f"""
+    <div id="cal-wrap" style="
+        font-family: -apple-system, 'Inter', 'Noto Sans KR', sans-serif;
+        user-select: none;
+        padding: 16px 0;
+    ">
+        <div id="cal-header" style="
+            text-align: center;
+            margin-bottom: 16px;
+            position: relative;
+        ">
+            <div id="cal-title" style="
+                font-size: 22px;
+                font-weight: 700;
+                color: #1d1d1f;
+                transition: opacity 0.2s;
+            "></div>
+            <div style="
+                font-size: 11px;
+                color: #adb5bd;
+                margin-top: 4px;
+            ">스크롤하여 월 이동</div>
+        </div>
+        <div id="cal-weekdays" style="
+            display: grid;
+            grid-template-columns: repeat(7, 1fr);
+            margin-bottom: 4px;
+        "></div>
+        <div id="cal-grid" style="
+            display: grid;
+            grid-template-columns: repeat(7, 1fr);
+            gap: 2px;
+            transition: opacity 0.15s ease, transform 0.15s ease;
+        "></div>
+    </div>
+
+    <script>
+    (function() {{
+        const orderData = {eta_json};
+        const todayStr = "{today_str}";
+        const todayParts = todayStr.split('-').map(Number);
+        let year = {now.year};
+        let month = {now.month};
+
+        const weekdays = ['일', '월', '화', '수', '목', '금', '토'];
+        const wdContainer = document.getElementById('cal-weekdays');
+        weekdays.forEach((w, i) => {{
+            const el = document.createElement('div');
+            el.textContent = w;
+            el.style.cssText = 'text-align:center;font-size:12px;font-weight:600;padding:6px 0;color:' + (i === 0 ? '#ef4444' : i === 6 ? '#3b82f6' : '#86868b');
+            wdContainer.appendChild(el);
+        }});
+
+        function daysInMonth(y, m) {{ return new Date(y, m, 0).getDate(); }}
+        function firstDay(y, m) {{ return new Date(y, m - 1, 1).getDay(); }}
+
+        function pad(n) {{ return n < 10 ? '0' + n : '' + n; }}
+
+        function render() {{
+            const title = document.getElementById('cal-title');
+            title.textContent = year + '년 ' + month + '월';
+
+            const grid = document.getElementById('cal-grid');
+            grid.innerHTML = '';
+            const fd = firstDay(year, month);
+            const nd = daysInMonth(year, month);
+
+            for (let i = 0; i < fd; i++) {{
+                const c = document.createElement('div');
+                c.style.cssText = 'text-align:center;padding:10px 4px;min-height:44px;';
+                grid.appendChild(c);
+            }}
+
+            for (let d = 1; d <= nd; d++) {{
+                const c = document.createElement('div');
+                const dateStr = year + '-' + pad(month) + '-' + pad(d);
+                const count = orderData[dateStr] || 0;
+                const isToday = (year === todayParts[0] && month === todayParts[1] && d === todayParts[2]);
+                const dayOfWeek = (fd + d - 1) % 7;
+
+                let bg = 'transparent';
+                let fontWeight = '400';
+                let textColor = dayOfWeek === 0 ? '#ef4444' : dayOfWeek === 6 ? '#3b82f6' : '#1d1d1f';
+
+                if (isToday) {{
+                    bg = '#1d1d1f';
+                    textColor = '#ffffff';
+                    fontWeight = '700';
+                }}
+
+                let isPast = false;
+                if (count > 0) {{
+                    const dd = new Date(year, month - 1, d);
+                    const td = new Date(todayParts[0], todayParts[1] - 1, todayParts[2]);
+                    isPast = dd < td;
+                }}
+
+                c.style.cssText = 'text-align:center;padding:6px 4px;min-height:44px;border-radius:12px;font-size:14px;background:' + bg + ';font-weight:' + fontWeight + ';color:' + textColor + ';position:relative;';
+
+                let html = '<span style="' + (isToday ? 'display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;border-radius:50%;' : '') + '">' + d + '</span>';
+
+                if (count > 0) {{
+                    const dotColor = isPast ? '#ef4444' : '#0071e3';
+                    html += '<div style="width:6px;height:6px;border-radius:50%;background:' + dotColor + ';margin:3px auto 0;"></div>';
+                    if (!isToday) {{
+                        c.style.background = isPast ? '#fef2f2' : '#eff6ff';
+                    }}
+                }}
+
+                c.innerHTML = html;
+                grid.appendChild(c);
+            }}
+        }}
+
+        // 휠 이벤트 (디바운스)
+        let locked = false;
+        const wrap = document.getElementById('cal-wrap');
+        wrap.addEventListener('wheel', function(e) {{
+            e.preventDefault();
+            if (locked) return;
+            locked = true;
+            setTimeout(function() {{ locked = false; }}, 280);
+
+            const grid = document.getElementById('cal-grid');
+            const dir = e.deltaY > 0 ? 1 : -1;
+
+            // 페이드 아웃
+            grid.style.opacity = '0';
+            grid.style.transform = 'translateY(' + (dir * -8) + 'px)';
+
+            setTimeout(function() {{
+                month += dir;
+                if (month > 12) {{ month = 1; year++; }}
+                if (month < 1) {{ month = 12; year--; }}
+                render();
+                grid.style.transform = 'translateY(' + (dir * 8) + 'px)';
+                // 트리거 리플로우
+                void grid.offsetHeight;
+                grid.style.opacity = '1';
+                grid.style.transform = 'translateY(0)';
+            }}, 120);
+        }}, {{ passive: false }});
+
+        // 터치 스와이프
+        let touchStartY = 0;
+        wrap.addEventListener('touchstart', function(e) {{
+            touchStartY = e.touches[0].clientY;
+        }}, {{ passive: true }});
+        wrap.addEventListener('touchend', function(e) {{
+            const diff = touchStartY - e.changedTouches[0].clientY;
+            if (Math.abs(diff) > 40) {{
+                const dir = diff > 0 ? 1 : -1;
+                month += dir;
+                if (month > 12) {{ month = 1; year++; }}
+                if (month < 1) {{ month = 12; year--; }}
+                render();
+            }}
+        }}, {{ passive: true }});
+
+        render();
+    }})();
+    </script>
+    """
+    components.html(cal_html, height=400, scrolling=False)
 
 
 # ════════════════════════════════════════════
@@ -248,105 +525,50 @@ if page == "📊 대시보드":
         today_str = datetime.now().strftime("%Y-%m-%d")
         now = datetime.now()
 
-        # ── 입고 캘린더 ──
-        if "cal_month_offset" not in st.session_state:
-            st.session_state["cal_month_offset"] = 0
+        # ── 입고 캘린더 (휠 스크롤) ──
+        render_wheel_calendar(orders)
 
-        month_offset = st.session_state["cal_month_offset"]
-        total_months = now.year * 12 + (now.month - 1) + month_offset
-        year = total_months // 12
-        month = total_months % 12 + 1
-        first_weekday, num_days = monthrange(year, month)
-
-        nav_l, nav_c, nav_r = st.columns([1, 3, 1])
-        with nav_l:
-            if st.button("◀", key="cal_prev", use_container_width=True):
-                st.session_state["cal_month_offset"] -= 1
-                st.rerun()
-        with nav_c:
-            st.markdown(f"<h2 style='text-align:center; margin:0; padding:4px 0;'>{year}년 {month}월</h2>", unsafe_allow_html=True)
-        with nav_r:
-            if st.button("▶", key="cal_next", use_container_width=True):
-                st.session_state["cal_month_offset"] += 1
-                st.rerun()
-
-        # 해당 월 입고 예정 수집
-        eta_map = {}
+        # ── 입고 예정 리스트 (전체, ETA 순) ──
+        upcoming = []
         for o in orders:
             if o.get("eta") and o.get("status") != "입고 완료":
-                try:
-                    eta_dt = datetime.strptime(o["eta"], "%Y-%m-%d")
-                    if eta_dt.year == year and eta_dt.month == month:
-                        day = eta_dt.day
-                        if day not in eta_map:
-                            eta_map[day] = []
-                        eta_map[day].append(o)
-                except Exception:
-                    pass
+                upcoming.append(o)
+        upcoming.sort(key=lambda x: x.get("eta", "9999"))
 
-        # 캘린더 HTML (단순 그리드만 — 깨지지 않도록)
-        weekdays = ["일", "월", "화", "수", "목", "금", "토"]
-        cal_html = '<div class="cal-grid">'
-        for w in weekdays:
-            cal_html += f'<div class="cal-header">{w}</div>'
-        # 일요일 시작으로 변환 (monthrange는 월요일 기준이므로 +1)
-        sun_start = (first_weekday + 1) % 7
-        for _ in range(sun_start):
-            cal_html += '<div class="cal-day empty"></div>'
-        for day in range(1, num_days + 1):
-            cls = "cal-day"
-            dot = ""
-            if day == now.day and month == now.month and year == now.year:
-                cls += " today"
-            if day in eta_map:
-                is_past = datetime(year, month, day) < datetime(now.year, now.month, now.day)
-                cls += " has-order"
-                if is_past:
-                    cls += " urgent"
-                dot = '<div class="cal-dot"></div>'
-            cal_html += f'<div class="{cls}">{day}{dot}</div>'
-        cal_html += "</div>"
-
-        st.markdown(cal_html, unsafe_allow_html=True)
-
-        # ── 입고 예정 리스트 (Streamlit 네이티브) ──
-        if eta_map:
+        if upcoming:
             st.markdown("")
-            for day in sorted(eta_map.keys()):
-                day_date = f"{year}-{month:02d}-{day:02d}"
-                is_past = day_date < today_str
-                for o in eta_map[day]:
-                    items = o.get("items", [])
-                    total_qty = sum(i.get("quantity", 0) for i in items)
+            for o in upcoming[:15]:
+                eta_str = o["eta"]
+                is_past = eta_str < today_str
+                items = o.get("items", [])
+                total_qty = sum(i.get("quantity", 0) for i in items)
+                doc_type = o.get("doc_type", "발주서")
+                dtype_icon = "📋" if doc_type == "발주서" else "📄"
+                eta_dt = parse_date(eta_str)
+                eta_display = f"{eta_dt.month}/{eta_dt.day}" if eta_dt else eta_str
 
-                    # 지연 여부 표시
-                    if is_past:
-                        days_late = (now - datetime.strptime(day_date, "%Y-%m-%d")).days
-                        label = f"🔴  {month}/{day} — {o.get('supplier', '')}  ·  **{days_late}일 지연**"
-                    else:
-                        label = f"🔵  {month}/{day} — {o.get('supplier', '')}"
+                if is_past:
+                    days_late = (now - datetime.strptime(eta_str, "%Y-%m-%d")).days
+                    label = f"🔴  {eta_display} — {dtype_icon} {o.get('supplier', '')}  ·  **{days_late}일 지연**"
+                else:
+                    label = f"🔵  {eta_display} — {dtype_icon} {o.get('supplier', '')}"
 
-                    with st.expander(label, expanded=is_past):
-                        # 품목 + 색상 + 수량 테이블
-                        rows = []
-                        for it in items:
-                            display = it.get("display_name") or ""
-                            name = it.get("name", "")
-                            show_name = display if display else name
-                            color = it.get("color") or ""
-                            if color:
-                                show_name = f"{show_name} ({color})"
-                            rows.append({
-                                "품목": show_name,
-                                "수량": it.get("quantity", 0),
-                            })
-                        df = pd.DataFrame(rows)
-                        st.dataframe(df, use_container_width=True, hide_index=True)
-                        st.caption(f"총 {total_qty:,}개  ·  {fmt_amount(o.get('total_amount'), o.get('currency'))}")
+                with st.expander(label, expanded=is_past):
+                    rows = []
+                    for it in items:
+                        display = it.get("display_name") or ""
+                        name = it.get("name", "")
+                        show_name = display if display else name
+                        color = it.get("color") or ""
+                        if color:
+                            show_name = f"{show_name} ({color})"
+                        rows.append({"품목": show_name, "수량": it.get("quantity", 0)})
+                    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+                    st.caption(f"총 {total_qty:,}개  ·  {fmt_amount(o.get('total_amount'), o.get('currency'))}")
 
         st.markdown("---")
 
-        # ── 전체 발주 목록 (간결 테이블) ──
+        # ── 전체 발주 목록 (그룹화) ──
         st.subheader("전체 발주")
 
         status_filter = st.selectbox(
@@ -356,58 +578,35 @@ if page == "📊 대시보드":
         )
         filtered = orders if status_filter == "전체" else [o for o in orders if o.get("status") == status_filter]
 
-        for o in filtered[:20]:
-            items = o.get("items", [])
-            total_qty = sum(i.get("quantity", 0) for i in items)
-            status = o.get("status", "확인 대기")
-            d_dtype = o.get("doc_type", "발주서")
-            d_icon = "📋" if d_dtype == "발주서" else "📄"
-            d_link = f"  ·  🔗" if o.get("linked_id") else ""
+        groups = group_orders(filtered)
 
-            header = f"{d_icon} {o['id']}  ·  **{o.get('supplier', '')}**  ·  {fmt_amount(o.get('total_amount'), o.get('currency'))}  ·  {status}{d_link}"
+        for group in groups[:20]:
+            if len(group) == 1:
+                # ── 단독 건 ──
+                o = group[0]
+                doc_type = o.get("doc_type", "발주서")
+                d_icon = "📋" if doc_type == "발주서" else "📄"
+                status = o.get("status", "확인 대기")
+                items = o.get("items", [])
+                total_qty = sum(i.get("quantity", 0) for i in items)
 
-            with st.expander(header):
-                st.caption(
-                    f"발주일: {o.get('order_date', '-')}  |  "
-                    f"입고예정: {o.get('eta') or '-'}  |  "
-                    f"{total_qty:,}개 · {len(items)}종"
-                )
-                # 품목 테이블 (인보이스 변환기 스타일)
-                o_cur = o.get("currency", "KRW")
-                has_img = any(it.get("image") for it in items)
-                rows = []
-                for it in items:
-                    display = it.get("display_name") or ""
-                    name = it.get("name", "")
-                    show_name = display if display else name
-                    color = it.get("color") or ""
-                    if color:
-                        show_name = f"{show_name} ({color})"
-                    if it.get("krw_price"):
-                        krw = it["krw_price"]
-                        vendor = it["vendor_price"]
-                        online = it["online_price"]
-                    else:
-                        krw, vendor, online = calc_prices(it.get("unit_price", 0), o_cur)
-                    qty = it.get("quantity", 0)
-                    row = {}
-                    if has_img:
-                        row["이미지"] = it.get("image") or ""
-                    row["제품명"] = show_name
-                    row["수량"] = qty
-                    row["단가"] = f"₩{krw:,.0f}"
-                    row["업체가"] = f"₩{vendor:,.0f}"
-                    row["온라인가"] = f"₩{online:,.0f}"
-                    row["총금액"] = f"₩{qty * krw:,.0f}"
-                    rows.append(row)
-                df = pd.DataFrame(rows)
-                dash_col_config = {}
-                if has_img:
-                    dash_col_config["이미지"] = st.column_config.ImageColumn("이미지", width="small")
-                st.dataframe(df, use_container_width=True, hide_index=True, column_config=dash_col_config)
+                header = f"{d_icon} **[{doc_type}]** {o['id']}  ·  {o.get('supplier', '')}  ·  {fmt_amount(o.get('total_amount'), o.get('currency'))}  ·  {status}"
+                with st.expander(header):
+                    render_order_card(o)
 
-                if o.get("notes"):
-                    st.info(f"📝 {o['notes']}")
+            else:
+                # ── 연결된 건 (발주서 + 인보이스) ──
+                po = group[0]
+                inv = group[1] if len(group) > 1 else None
+                supplier = po.get("supplier") or (inv.get("supplier") if inv else "")
+                status_po = po.get("status", "확인 대기")
+
+                header = f"🔗 **[발주서+인보이스]** {po['id']} + {inv['id']}  ·  {supplier}  ·  {status_po}"
+                with st.expander(header):
+                    render_order_card(po)
+                    if inv:
+                        st.markdown('<div class="group-divider"></div>', unsafe_allow_html=True)
+                        render_order_card(inv)
 
 
 # ════════════════════════════════════════════
@@ -449,21 +648,17 @@ elif page == "⬆️ 발주서 업로드":
     )
 
     if uploaded_files:
-        # 처리 상태 초기화
         if "upload_results" not in st.session_state:
             st.session_state["upload_results"] = {}
 
         results = st.session_state["upload_results"]
 
-        # ── 각 파일 자동 분석 + 등록 ──
         for uploaded in uploaded_files:
             file_key = f"{uploaded.name}_{uploaded.size}"
 
-            # 이미 처리 완료된 파일은 건너뛰기
             if file_key in results and results[file_key].get("done"):
                 continue
 
-            # 분석 시작
             if file_key not in results:
                 st.info(f"⏳ **{uploaded.name}** 분석 중...")
                 try:
@@ -482,12 +677,10 @@ elif page == "⬆️ 발주서 업로드":
         for file_key, res in results.items():
             fname = res.get("file_name", "")
 
-            # 오류 발생한 파일
             if res.get("error"):
                 st.error(f"**{fname}** — 분석 실패: {res['error']}")
                 continue
 
-            # 이미 등록 완료 — 이미지 수 + 품목 수 표시
             if res.get("done") and res.get("order_id"):
                 dtype = res.get("doc_type", "")
                 icnt = res.get("item_count", 0)
@@ -497,7 +690,6 @@ elif page == "⬆️ 발주서 업로드":
                 st.success(f"{dtype_icon} **{fname}** → {res.get('order_id')} {dtype} 등록 완료{extra}")
                 continue
 
-            # 분석 완료, 등록 대기 중
             parsed = res.get("parsed")
             if not parsed:
                 continue
@@ -505,25 +697,33 @@ elif page == "⬆️ 발주서 업로드":
             has_pending = True
             items = parsed.get("items", [])
             currency = parsed.get("currency", "KRW")
-            # 가격 자동 계산
             items = add_calc_prices(items, currency)
 
             total_qty = sum(i.get("quantity", 0) for i in items)
             total_krw = sum(i.get("quantity", 0) * i.get("krw_price", 0) for i in items)
             img_count = sum(1 for i in items if i.get("image"))
 
-            # 요약 카드
             st.markdown("---")
-            st.markdown(f"#### {fname}")
+            # 유형 뱃지 + 파일명
+            badge_cls = "badge-po" if doc_type == "발주서" else "badge-inv"
+            st.markdown(f'<span class="{badge_cls}">{doc_type}</span> **{fname}**', unsafe_allow_html=True)
 
-            # 거래처 + 통화 선택
+            # 거래처 + 날짜 (유형별 라벨)
+            od_label = date_label(doc_type, "order_date")
+            eta_label = date_label(doc_type, "eta")
             info1, info2 = st.columns([3, 1])
             with info1:
-                st.caption(
-                    f"거래처: **{parsed.get('supplier', '-')}**  |  "
-                    f"발주일: {parsed.get('order_date', '-')}  |  "
-                    f"입고예정: {parsed.get('eta') or '-'}"
-                )
+                if doc_type == "발주서":
+                    st.caption(
+                        f"거래처: **{parsed.get('supplier', '-')}**  |  "
+                        f"{od_label}: {parsed.get('order_date', '-')}"
+                    )
+                else:
+                    st.caption(
+                        f"거래처: **{parsed.get('supplier', '-')}**  |  "
+                        f"{od_label}: {parsed.get('order_date', '-')}  |  "
+                        f"{eta_label}: {parsed.get('eta') or '-'}"
+                    )
             with info2:
                 currencies = ["KRW", "CNY", "USD", "JPY"]
                 cur_idx = currencies.index(currency) if currency in currencies else 0
@@ -533,47 +733,24 @@ elif page == "⬆️ 발주서 업로드":
                 )
                 parsed["currency"] = selected_cur
                 currency = selected_cur
-                # 통화 변경 시 재계산
                 if selected_cur != currency:
                     items = add_calc_prices(items, selected_cur)
 
-            # 통계 바 (인보이스 변환기 스타일)
+            # 통계 바
             st1, st2, st3, st4 = st.columns(4)
             st1.metric("총 품목", f"{len(items)}")
             st2.metric("총 수량", f"{total_qty:,}")
             st3.metric("총 금액", f"₩{total_krw:,.0f}")
             st4.metric("이미지", f"{img_count}")
 
-            # 환율 정보
             rate = get_rates().get(currency, 1)
             if currency != "KRW":
                 st.caption(f"💱 환율: 1 {currency} = {rate:,.0f}원  |  원단가 ×{get_vendor_multi()} = 업체가  |  원단가 ×{get_online_multi()} = 온라인가")
 
-            # 품목 테이블 (인보이스 변환기 스타일: 이미지, 제품명, 수량, 단가, 업체가, 온라인가, 총금액)
-            has_images = any(it.get("image") for it in items)
-            rows = []
-            for it in items:
-                name = it.get("name", "")
-                color = it.get("color") or ""
-                show = f"{name} ({color})" if color else name
-                qty = it.get("quantity", 0)
-                krw = it.get("krw_price", 0)
-                row = {}
-                if has_images:
-                    row["이미지"] = it.get("image") or ""
-                row["제품명"] = show
-                row["수량"] = qty
-                row["단가"] = f"₩{krw:,.0f}"
-                row["업체가"] = f"₩{it.get('vendor_price', 0):,.0f}"
-                row["온라인가"] = f"₩{it.get('online_price', 0):,.0f}"
-                row["총금액"] = f"₩{qty * krw:,.0f}"
-                rows.append(row)
-            col_config = {}
-            if has_images:
-                col_config["이미지"] = st.column_config.ImageColumn("이미지", width="small")
-            st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True, column_config=col_config)
+            # 품목 테이블
+            render_order_items_table(items, currency)
 
-            # 연결 건 선택 (발주서 ↔ 인보이스 묶기)
+            # 연결 건 선택
             all_orders = load_all_orders()
             opposite_type = "인보이스" if doc_type == "발주서" else "발주서"
             linkable = [o for o in all_orders if o.get("doc_type") == opposite_type and not o.get("linked_id")]
@@ -590,7 +767,7 @@ elif page == "⬆️ 발주서 업로드":
             if selected_link != "연결 안 함":
                 linked_id = linkable[link_options.index(selected_link) - 1]["id"]
 
-            # 버튼: 바로 등록 / 수정 후 등록
+            # 버튼
             btn_col1, btn_col2 = st.columns(2)
             with btn_col1:
                 if st.button("✅ 바로 등록", key=f"quick_{file_key}", type="primary", use_container_width=True):
@@ -609,7 +786,6 @@ elif page == "⬆️ 발주서 업로드":
                         "linked_id": linked_id,
                     }
                     order_id = save_order(order)
-                    # 상대 건에도 연결 설정
                     if linked_id:
                         linked_order = load_order(linked_id)
                         if linked_order:
@@ -628,28 +804,29 @@ elif page == "⬆️ 발주서 업로드":
                     st.session_state[f"expand_{file_key}"] = True
                     st.rerun()
 
-            # ── 수정 모드 (펼침) ──
+            # ── 수정 모드 ──
             if st.session_state.get(f"expand_{file_key}"):
                 st.markdown("---")
+                od_lbl = date_label(doc_type, "order_date")
+                eta_lbl = date_label(doc_type, "eta")
 
                 ec1, ec2, ec3, ec4 = st.columns(4)
                 with ec1:
                     parsed["supplier"] = st.text_input("거래처", value=parsed.get("supplier", ""), key=f"sup_{file_key}")
                 with ec2:
                     od = parse_date(parsed.get("order_date"))
-                    sel_od = st.date_input("발주일", value=od or datetime.now().date(), key=f"od_{file_key}")
+                    sel_od = st.date_input(od_lbl, value=od or datetime.now().date(), key=f"od_{file_key}")
                     parsed["order_date"] = sel_od.strftime("%Y-%m-%d")
                 with ec3:
                     eta_val = parse_date(parsed.get("eta"))
                     default_eta = eta_val or ((parse_date(parsed.get("order_date")) or datetime.now().date()) + timedelta(days=7))
-                    sel_eta = st.date_input("입고예정일", value=default_eta, key=f"eta_{file_key}")
+                    sel_eta = st.date_input(eta_lbl, value=default_eta, key=f"eta_{file_key}")
                     parsed["eta"] = sel_eta.strftime("%Y-%m-%d") if sel_eta else None
                 with ec4:
                     currencies = ["KRW", "CNY", "USD", "JPY"]
                     cur_idx = currencies.index(currency) if currency in currencies else 0
                     parsed["currency"] = st.selectbox("통화", currencies, index=cur_idx, key=f"cur_{file_key}")
 
-                # 품목 테이블 (수정 가능 + 가격 계산)
                 edit_cur = parsed.get("currency", "KRW")
                 edit_items = add_calc_prices(items, edit_cur)
                 edit_rows = []
@@ -698,7 +875,6 @@ elif page == "⬆️ 발주서 업로드":
                             "online_price": online,
                             "memo": row["메모"] if row["메모"] else "",
                         }
-                        # 이미지 유지
                         if i < len(items) and items[i].get("image"):
                             item_dict["image"] = items[i]["image"]
                         new_items.append(item_dict)
@@ -731,11 +907,10 @@ elif page == "⬆️ 발주서 업로드":
                     st.session_state["upload_results"] = results
                     st.rerun()
 
-        # 전체 등록 완료 시 초기화 안내
         if results and not has_pending:
             st.markdown("---")
-            st.success("모든 발주서가 등록되었습니다!")
-            if st.button("새 발주서 업로드"):
+            st.success("모든 파일이 등록되었습니다!")
+            if st.button("새 파일 업로드"):
                 st.session_state["upload_results"] = {}
                 st.rerun()
 
@@ -771,166 +946,262 @@ elif page == "📋 발주 목록":
 
     st.caption(f"{len(filtered)}건")
 
-    for o in filtered:
+    # ── 그룹화된 목록 ──
+    groups = group_orders(filtered)
+
+    def render_order_edit(o):
+        """단일 주문 편집 UI"""
         oid = o["id"]
+        doc_type = o.get("doc_type", "발주서")
         status = o.get("status", "확인 대기")
         items = o.get("items", [])
         total_qty = sum(i.get("quantity", 0) for i in items)
-        o_doc_type = o.get("doc_type", "발주서")
-        dtype_icon = "📋" if o_doc_type == "발주서" else "📄"
-        linked_tag = ""
-        if o.get("linked_id"):
-            linked_tag = f"  ·  🔗 {o['linked_id']}"
 
-        header = f"{dtype_icon} {oid}  ·  **{o.get('supplier', '')}**  ·  {fmt_amount(o.get('total_amount'), o.get('currency'))}  ·  {status}{linked_tag}"
+        badge_cls = "badge-po" if doc_type == "발주서" else "badge-inv"
+        st.markdown(f'<span class="{badge_cls}">{doc_type}</span> **{oid}**', unsafe_allow_html=True)
 
-        with st.expander(header):
+        od_lbl = date_label(doc_type, "order_date")
+        eta_lbl = date_label(doc_type, "eta")
 
-            # ── 연결된 건 표시 ──
-            if o.get("linked_id"):
-                linked = load_order(o["linked_id"])
-                if linked:
-                    l_type = linked.get("doc_type", "발주서")
-                    l_icon = "📋" if l_type == "발주서" else "📄"
-                    l_items = linked.get("items", [])
-                    l_qty = sum(i.get("quantity", 0) for i in l_items)
-                    st.info(f"🔗 연결된 {l_type}: {l_icon} **{linked['id']}** · {linked.get('supplier', '')} · {len(l_items)}개 품목 · {l_qty:,}개")
-
-            # ── 기본 정보 수정 ──
-            st.markdown("**기본 정보**")
-            bc1, bc2, bc3, bc4 = st.columns(4)
-            with bc1:
-                edit_supplier = st.text_input(
-                    "거래처", value=o.get("supplier", ""), key=f"sup_{oid}",
-                )
-            with bc2:
-                od = parse_date(o.get("order_date"))
-                edit_od = st.date_input(
-                    "발주일", value=od or datetime.now().date(), key=f"od_{oid}",
-                )
-            with bc3:
-                eta = parse_date(o.get("eta"))
-                edit_eta = st.date_input(
-                    "입고예정일", value=eta or None, key=f"eta_{oid}",
-                )
-            with bc4:
-                statuses = ["확인 대기", "확인 완료", "배송 중", "입고 완료"]
-                edit_status = st.selectbox(
-                    "상태", statuses,
-                    index=statuses.index(status) if status in statuses else 0,
-                    key=f"st_{oid}",
-                )
-
-            edit_notes = st.text_input(
-                "발주 메모", value=o.get("notes") or "", key=f"notes_{oid}",
-                placeholder="이 발주 건에 대한 메모",
+        bc1, bc2, bc3, bc4 = st.columns(4)
+        with bc1:
+            edit_supplier = st.text_input("거래처", value=o.get("supplier", ""), key=f"sup_{oid}")
+        with bc2:
+            od = parse_date(o.get("order_date"))
+            edit_od = st.date_input(od_lbl, value=od or datetime.now().date(), key=f"od_{oid}")
+        with bc3:
+            eta = parse_date(o.get("eta"))
+            edit_eta = st.date_input(eta_lbl, value=eta or None, key=f"eta_{oid}")
+        with bc4:
+            statuses = ["확인 대기", "확인 완료", "배송 중", "입고 완료"]
+            edit_status = st.selectbox(
+                "상태", statuses,
+                index=statuses.index(status) if status in statuses else 0,
+                key=f"st_{oid}",
             )
 
-            st.caption(f"📎 {o.get('source_file', '-')}  |  {total_qty:,}개 · {len(items)}종")
+        edit_notes = st.text_input(
+            "메모", value=o.get("notes") or "", key=f"notes_{oid}",
+            placeholder="특이사항",
+        )
+        st.caption(f"📎 {o.get('source_file', '-')}  |  {total_qty:,}개 · {len(items)}종")
 
-            st.markdown("---")
+        # 품목 테이블
+        edited = None
+        if items:
+            o_cur = o.get("currency", "KRW")
+            rate = get_rates().get(o_cur, 1)
+            if o_cur != "KRW":
+                st.caption(f"💱 1 {o_cur} = {rate:,.0f}원  |  ×{get_vendor_multi()} 업체가  |  ×{get_online_multi()} 온라인가")
 
-            # ── 품목 테이블 (전체 수정 가능 + 가격 계산) ──
-            if items:
-                o_cur = o.get("currency", "KRW")
-                rate = get_rates().get(o_cur, 1)
-                if o_cur != "KRW":
-                    st.caption(f"💱 환율: 1 {o_cur} = {rate:,.0f}원  |  원단가 ×{get_vendor_multi()} = 업체가  |  원단가 ×{get_online_multi()} = 온라인가")
-                st.markdown("**품목 상세**")
-
-                has_img_list = any(it.get("image") for it in items)
-                items_data = []
-                for it in items:
-                    if it.get("krw_price"):
-                        krw, vendor, online = it["krw_price"], it["vendor_price"], it["online_price"]
-                    else:
-                        krw, vendor, online = calc_prices(it.get("unit_price", 0), o_cur)
-                    row = {}
-                    if has_img_list:
-                        row["이미지"] = it.get("image") or ""
-                    row["원본명"] = it.get("name", "")
-                    row["색상"] = it.get("color") or ""
-                    row["내부명"] = it.get("display_name") or ""
-                    row["수량"] = it.get("quantity", 0)
-                    row[f"단가({o_cur})"] = it.get("unit_price", 0)
-                    row["원단가(₩)"] = krw
-                    row["업체가(₩)"] = vendor
-                    row["온라인가(₩)"] = online
-                    row["메모"] = it.get("memo", "")
-                    items_data.append(row)
-
-                edit_col_config = {
-                    "원본명": st.column_config.TextColumn("원본명", width="medium"),
-                    "색상": st.column_config.TextColumn("색상", width="small"),
-                    "내부명": st.column_config.TextColumn("내부명", width="medium"),
-                    "수량": st.column_config.NumberColumn("수량", format="%.0f"),
-                    f"단가({o_cur})": st.column_config.NumberColumn(f"단가({o_cur})", format="%.2f"),
-                    "원단가(₩)": st.column_config.NumberColumn("원단가(₩)", format="%d"),
-                    "업체가(₩)": st.column_config.NumberColumn("업체가(₩)", format="%d"),
-                    "온라인가(₩)": st.column_config.NumberColumn("온라인가(₩)", format="%d"),
-                    "메모": st.column_config.TextColumn("메모", width="medium"),
-                }
-                disabled_cols = ["원단가(₩)", "업체가(₩)", "온라인가(₩)"]
+            has_img_list = any(it.get("image") for it in items)
+            items_data = []
+            for it in items:
+                if it.get("krw_price"):
+                    krw, vendor, online = it["krw_price"], it["vendor_price"], it["online_price"]
+                else:
+                    krw, vendor, online = calc_prices(it.get("unit_price", 0), o_cur)
+                row = {}
                 if has_img_list:
-                    edit_col_config["이미지"] = st.column_config.ImageColumn("이미지", width="small")
-                    disabled_cols.append("이미지")
+                    row["이미지"] = it.get("image") or ""
+                row["원본명"] = it.get("name", "")
+                row["색상"] = it.get("color") or ""
+                row["내부명"] = it.get("display_name") or ""
+                row["수량"] = it.get("quantity", 0)
+                row[f"단가({o_cur})"] = it.get("unit_price", 0)
+                row["원단가(₩)"] = krw
+                row["업체가(₩)"] = vendor
+                row["온라인가(₩)"] = online
+                row["메모"] = it.get("memo", "")
+                items_data.append(row)
 
-                edited = st.data_editor(
-                    pd.DataFrame(items_data),
-                    use_container_width=True,
-                    hide_index=True,
-                    disabled=disabled_cols,
-                    column_config=edit_col_config,
-                    key=f"edit_{oid}",
-                )
+            edit_col_config = {
+                "원본명": st.column_config.TextColumn("원본명", width="medium"),
+                "색상": st.column_config.TextColumn("색상", width="small"),
+                "내부명": st.column_config.TextColumn("내부명", width="medium"),
+                "수량": st.column_config.NumberColumn("수량", format="%.0f"),
+                f"단가({o_cur})": st.column_config.NumberColumn(f"단가({o_cur})", format="%.2f"),
+                "원단가(₩)": st.column_config.NumberColumn("원단가(₩)", format="%d"),
+                "업체가(₩)": st.column_config.NumberColumn("업체가(₩)", format="%d"),
+                "온라인가(₩)": st.column_config.NumberColumn("온라인가(₩)", format="%d"),
+                "메모": st.column_config.TextColumn("메모", width="medium"),
+            }
+            disabled_cols = ["원단가(₩)", "업체가(₩)", "온라인가(₩)"]
+            if has_img_list:
+                edit_col_config["이미지"] = st.column_config.ImageColumn("이미지", width="small")
+                disabled_cols.append("이미지")
 
-            st.markdown("---")
+            edited = st.data_editor(
+                pd.DataFrame(items_data),
+                use_container_width=True,
+                hide_index=True,
+                disabled=disabled_cols,
+                column_config=edit_col_config,
+                key=f"edit_{oid}",
+            )
 
-            # ── 저장 / 삭제 버튼 ──
-            save_col, del_col = st.columns([3, 1])
-            with save_col:
-                if st.button("💾 저장", key=f"save_all_{oid}", type="primary", use_container_width=True):
-                    # 품목 데이터 수집 + 가격 재계산
-                    save_cur = o.get("currency", "KRW")
-                    price_col = f"단가({save_cur})"
-                    new_items = []
-                    if items:
-                        for i, row in edited.iterrows():
-                            up = row.get(price_col, 0)
-                            krw, vendor, online = calc_prices(up, save_cur)
-                            item_dict = {
-                                "name": row["원본명"],
-                                "color": row["색상"] if row["색상"] else "",
-                                "display_name": row["내부명"] if row["내부명"] else "",
-                                "quantity": row["수량"],
-                                "unit_price": up,
-                                "subtotal": row["수량"] * up,
-                                "krw_price": krw,
-                                "vendor_price": vendor,
-                                "online_price": online,
-                                "memo": row["메모"] if row["메모"] else "",
-                            }
-                            # 기존 이미지 유지
-                            if i < len(items) and items[i].get("image"):
-                                item_dict["image"] = items[i]["image"]
-                            new_items.append(item_dict)
-                    # 전체 주문 업데이트
-                    o_copy = dict(o)
-                    o_copy["supplier"] = edit_supplier
-                    o_copy["order_date"] = edit_od.strftime("%Y-%m-%d")
-                    o_copy["eta"] = edit_eta.strftime("%Y-%m-%d") if edit_eta else None
-                    o_copy["status"] = edit_status
-                    o_copy["notes"] = edit_notes if edit_notes else None
-                    o_copy["items"] = new_items if new_items else items
-                    o_copy["total_amount"] = sum(it.get("subtotal", 0) for it in o_copy["items"])
-                    update_order(oid, o_copy)
-                    st.success("저장 완료!")
-                    st.rerun()
+        return {
+            "supplier": edit_supplier,
+            "order_date": edit_od,
+            "eta": edit_eta,
+            "status": edit_status,
+            "notes": edit_notes,
+            "edited_df": edited,
+            "items": items,
+        }
 
-            with del_col:
-                if st.button("🗑️ 삭제", key=f"del_{oid}", use_container_width=True):
-                    delete_order(oid)
-                    st.rerun()
+    for group in groups:
+        if len(group) == 1:
+            # ── 단독 건 ──
+            o = group[0]
+            oid = o["id"]
+            doc_type = o.get("doc_type", "발주서")
+            d_icon = "📋" if doc_type == "발주서" else "📄"
+            status = o.get("status", "확인 대기")
+
+            header = f"{d_icon} **[{doc_type}]** {oid}  ·  {o.get('supplier', '')}  ·  {fmt_amount(o.get('total_amount'), o.get('currency'))}  ·  {status}"
+            with st.expander(header):
+                edit_data = render_order_edit(o)
+                st.markdown("---")
+                save_col, del_col = st.columns([3, 1])
+                with save_col:
+                    if st.button("💾 저장", key=f"save_all_{oid}", type="primary", use_container_width=True):
+                        save_cur = o.get("currency", "KRW")
+                        price_col = f"단가({save_cur})"
+                        new_items = []
+                        if edit_data["items"] and edit_data["edited_df"] is not None:
+                            for i, row in edit_data["edited_df"].iterrows():
+                                up = row.get(price_col, 0)
+                                krw, vendor, online = calc_prices(up, save_cur)
+                                item_dict = {
+                                    "name": row["원본명"],
+                                    "color": row["색상"] if row["색상"] else "",
+                                    "display_name": row["내부명"] if row["내부명"] else "",
+                                    "quantity": row["수량"],
+                                    "unit_price": up,
+                                    "subtotal": row["수량"] * up,
+                                    "krw_price": krw,
+                                    "vendor_price": vendor,
+                                    "online_price": online,
+                                    "memo": row["메모"] if row["메모"] else "",
+                                }
+                                if i < len(edit_data["items"]) and edit_data["items"][i].get("image"):
+                                    item_dict["image"] = edit_data["items"][i]["image"]
+                                new_items.append(item_dict)
+                        o_copy = dict(o)
+                        o_copy["supplier"] = edit_data["supplier"]
+                        o_copy["order_date"] = edit_data["order_date"].strftime("%Y-%m-%d")
+                        o_copy["eta"] = edit_data["eta"].strftime("%Y-%m-%d") if edit_data["eta"] else None
+                        o_copy["status"] = edit_data["status"]
+                        o_copy["notes"] = edit_data["notes"] if edit_data["notes"] else None
+                        o_copy["items"] = new_items if new_items else edit_data["items"]
+                        o_copy["total_amount"] = sum(it.get("subtotal", 0) for it in o_copy["items"])
+                        update_order(oid, o_copy)
+                        st.success("저장 완료!")
+                        st.rerun()
+                with del_col:
+                    if st.button("🗑️ 삭제", key=f"del_{oid}", use_container_width=True):
+                        delete_order(oid)
+                        st.rerun()
+
+        else:
+            # ── 연결된 건 (발주서 + 인보이스) ──
+            po = group[0]
+            inv = group[1]
+            supplier = po.get("supplier") or inv.get("supplier", "")
+
+            header = f"🔗 **[발주서+인보이스]** {po['id']} + {inv['id']}  ·  {supplier}"
+            with st.expander(header):
+                # 발주서 탭 / 인보이스 탭
+                tab_po, tab_inv = st.tabs(["📋 발주서", "📄 인보이스"])
+
+                with tab_po:
+                    edit_po = render_order_edit(po)
+                    st.markdown("---")
+                    sc1, dc1 = st.columns([3, 1])
+                    with sc1:
+                        if st.button("💾 저장", key=f"save_all_{po['id']}", type="primary", use_container_width=True):
+                            save_cur = po.get("currency", "KRW")
+                            price_col = f"단가({save_cur})"
+                            new_items = []
+                            if edit_po["items"] and edit_po["edited_df"] is not None:
+                                for i, row in edit_po["edited_df"].iterrows():
+                                    up = row.get(price_col, 0)
+                                    krw, vendor, online = calc_prices(up, save_cur)
+                                    item_dict = {
+                                        "name": row["원본명"],
+                                        "color": row["색상"] if row["색상"] else "",
+                                        "display_name": row["내부명"] if row["내부명"] else "",
+                                        "quantity": row["수량"],
+                                        "unit_price": up,
+                                        "subtotal": row["수량"] * up,
+                                        "krw_price": krw,
+                                        "vendor_price": vendor,
+                                        "online_price": online,
+                                        "memo": row["메모"] if row["메모"] else "",
+                                    }
+                                    if i < len(edit_po["items"]) and edit_po["items"][i].get("image"):
+                                        item_dict["image"] = edit_po["items"][i]["image"]
+                                    new_items.append(item_dict)
+                            o_copy = dict(po)
+                            o_copy["supplier"] = edit_po["supplier"]
+                            o_copy["order_date"] = edit_po["order_date"].strftime("%Y-%m-%d")
+                            o_copy["eta"] = edit_po["eta"].strftime("%Y-%m-%d") if edit_po["eta"] else None
+                            o_copy["status"] = edit_po["status"]
+                            o_copy["notes"] = edit_po["notes"] if edit_po["notes"] else None
+                            o_copy["items"] = new_items if new_items else edit_po["items"]
+                            o_copy["total_amount"] = sum(it.get("subtotal", 0) for it in o_copy["items"])
+                            update_order(po["id"], o_copy)
+                            st.success("저장 완료!")
+                            st.rerun()
+                    with dc1:
+                        if st.button("🗑️ 삭제", key=f"del_{po['id']}", use_container_width=True):
+                            delete_order(po["id"])
+                            st.rerun()
+
+                with tab_inv:
+                    edit_inv = render_order_edit(inv)
+                    st.markdown("---")
+                    sc2, dc2 = st.columns([3, 1])
+                    with sc2:
+                        if st.button("💾 저장", key=f"save_all_{inv['id']}", type="primary", use_container_width=True):
+                            save_cur = inv.get("currency", "KRW")
+                            price_col = f"단가({save_cur})"
+                            new_items = []
+                            if edit_inv["items"] and edit_inv["edited_df"] is not None:
+                                for i, row in edit_inv["edited_df"].iterrows():
+                                    up = row.get(price_col, 0)
+                                    krw, vendor, online = calc_prices(up, save_cur)
+                                    item_dict = {
+                                        "name": row["원본명"],
+                                        "color": row["색상"] if row["색상"] else "",
+                                        "display_name": row["내부명"] if row["내부명"] else "",
+                                        "quantity": row["수량"],
+                                        "unit_price": up,
+                                        "subtotal": row["수량"] * up,
+                                        "krw_price": krw,
+                                        "vendor_price": vendor,
+                                        "online_price": online,
+                                        "memo": row["메모"] if row["메모"] else "",
+                                    }
+                                    if i < len(edit_inv["items"]) and edit_inv["items"][i].get("image"):
+                                        item_dict["image"] = edit_inv["items"][i]["image"]
+                                    new_items.append(item_dict)
+                            o_copy = dict(inv)
+                            o_copy["supplier"] = edit_inv["supplier"]
+                            o_copy["order_date"] = edit_inv["order_date"].strftime("%Y-%m-%d")
+                            o_copy["eta"] = edit_inv["eta"].strftime("%Y-%m-%d") if edit_inv["eta"] else None
+                            o_copy["status"] = edit_inv["status"]
+                            o_copy["notes"] = edit_inv["notes"] if edit_inv["notes"] else None
+                            o_copy["items"] = new_items if new_items else edit_inv["items"]
+                            o_copy["total_amount"] = sum(it.get("subtotal", 0) for it in o_copy["items"])
+                            update_order(inv["id"], o_copy)
+                            st.success("저장 완료!")
+                            st.rerun()
+                    with dc2:
+                        if st.button("🗑️ 삭제", key=f"del_{inv['id']}", use_container_width=True):
+                            delete_order(inv["id"])
+                            st.rerun()
 
     # 엑셀 다운로드
     st.markdown("---")
@@ -938,14 +1209,19 @@ elif page == "📋 발주 목록":
         summary_data = []
         all_items_data = []
         for o in orders:
+            o_doc_type = o.get("doc_type", "발주서")
+            od_lbl = date_label(o_doc_type, "order_date")
+            eta_lbl = date_label(o_doc_type, "eta")
             summary_data.append({
                 "발주번호": o["id"],
+                "유형": o_doc_type,
                 "거래처": o.get("supplier"),
-                "발주일": o.get("order_date"),
-                "입고예정일": o.get("eta"),
+                od_lbl: o.get("order_date"),
+                eta_lbl: o.get("eta"),
                 "통화": o.get("currency"),
                 "총금액": o.get("total_amount"),
                 "상태": o.get("status"),
+                "연결": o.get("linked_id") or "",
             })
             o_cur = o.get("currency", "KRW")
             for i in o.get("items", []):
@@ -955,6 +1231,7 @@ elif page == "📋 발주 목록":
                     krw, vendor, online = calc_prices(i.get("unit_price", 0), o_cur)
                 all_items_data.append({
                     "발주번호": o["id"],
+                    "유형": o_doc_type,
                     "원본명": i.get("name"),
                     "색상": i.get("color") or "",
                     "내부명": i.get("display_name") or "",
@@ -1048,9 +1325,8 @@ elif page == "🔧 관리":
     with col2:
         backup = st.file_uploader("백업 복원", type=["json"], label_visibility="collapsed")
         if backup:
-            import json
             try:
-                data = json.loads(backup.read())
+                data = _json.loads(backup.read())
                 added = import_orders(data.get("orders", []))
                 st.success(f"{added}건 복원 완료")
             except Exception as e:
