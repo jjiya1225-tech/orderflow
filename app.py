@@ -345,8 +345,11 @@ if page == "📊 대시보드":
             items = o.get("items", [])
             total_qty = sum(i.get("quantity", 0) for i in items)
             status = o.get("status", "확인 대기")
+            d_dtype = o.get("doc_type", "발주서")
+            d_icon = "📋" if d_dtype == "발주서" else "📄"
+            d_link = f"  ·  🔗" if o.get("linked_id") else ""
 
-            header = f"{o['id']}  ·  **{o.get('supplier', '')}**  ·  {fmt_amount(o.get('total_amount'), o.get('currency'))}  ·  {status}"
+            header = f"{d_icon} {o['id']}  ·  **{o.get('supplier', '')}**  ·  {fmt_amount(o.get('total_amount'), o.get('currency'))}  ·  {status}{d_link}"
 
             with st.expander(header):
                 st.caption(
@@ -393,18 +396,38 @@ if page == "📊 대시보드":
 
 
 # ════════════════════════════════════════════
-# ⬆️ 발주서 업로드
+# ⬆️ 파일 업로드 (발주서 / 인보이스)
 # ════════════════════════════════════════════
 elif page == "⬆️ 발주서 업로드":
-    st.title("발주서 업로드")
-    st.caption("파일을 올리면 AI가 자동 분석 후 바로 등록합니다  ·  여러 파일도 한번에 가능")
+    st.title("파일 업로드")
+    st.caption("발주서 또는 인보이스를 올리면 AI가 자동 분석 후 등록합니다")
 
     if not API_KEY:
         st.error("Claude API 키가 설정되지 않았습니다. 관리자에게 문의하세요.")
         st.stop()
 
+    # 유형 선택
+    if "upload_doc_type" not in st.session_state:
+        st.session_state["upload_doc_type"] = "발주서"
+    type_col1, type_col2 = st.columns(2)
+    with type_col1:
+        if st.button("📋 발주서", use_container_width=True,
+                     type="primary" if st.session_state["upload_doc_type"] == "발주서" else "secondary"):
+            st.session_state["upload_doc_type"] = "발주서"
+            st.session_state["upload_results"] = {}
+            st.rerun()
+    with type_col2:
+        if st.button("📄 인보이스", use_container_width=True,
+                     type="primary" if st.session_state["upload_doc_type"] == "인보이스" else "secondary"):
+            st.session_state["upload_doc_type"] = "인보이스"
+            st.session_state["upload_results"] = {}
+            st.rerun()
+
+    doc_type = st.session_state["upload_doc_type"]
+    st.markdown("")
+
     uploaded_files = st.file_uploader(
-        "발주서 파일 선택 (여러 개 가능)",
+        f"{doc_type} 파일 선택 (여러 개 가능)",
         type=["xlsx", "xls", "csv", "pdf", "jpg", "jpeg", "png", "webp"],
         help="Excel, PDF, 이미지 파일 지원",
         accept_multiple_files=True,
@@ -449,9 +472,14 @@ elif page == "⬆️ 발주서 업로드":
                 st.error(f"**{fname}** — 분석 실패: {res['error']}")
                 continue
 
-            # 이미 등록 완료
+            # 이미 등록 완료 — 이미지 수 + 품목 수 표시
             if res.get("done") and res.get("order_id"):
-                st.success(f"**{fname}** → {res.get('order_id')} 등록 완료")
+                dtype = res.get("doc_type", "")
+                icnt = res.get("item_count", 0)
+                imgcnt = res.get("img_count", 0)
+                dtype_icon = "📋" if dtype == "발주서" else "📄"
+                extra = f"  ·  {icnt}개 품목  ·  {imgcnt}개 이미지" if icnt else ""
+                st.success(f"{dtype_icon} **{fname}** → {res.get('order_id')} {dtype} 등록 완료{extra}")
                 continue
 
             # 분석 완료, 등록 대기 중
@@ -530,6 +558,23 @@ elif page == "⬆️ 발주서 업로드":
                 col_config["이미지"] = st.column_config.ImageColumn("이미지", width="small")
             st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True, column_config=col_config)
 
+            # 연결 건 선택 (발주서 ↔ 인보이스 묶기)
+            all_orders = load_all_orders()
+            opposite_type = "인보이스" if doc_type == "발주서" else "발주서"
+            linkable = [o for o in all_orders if o.get("doc_type") == opposite_type and not o.get("linked_id")]
+            link_options = ["연결 안 함"] + [
+                f"{o['id']} · {o.get('supplier', '')} · {o.get('order_date', '')}"
+                for o in linkable
+            ]
+            selected_link = st.selectbox(
+                f"🔗 연결할 {opposite_type} 선택 (선택사항)",
+                link_options,
+                key=f"link_{file_key}",
+            )
+            linked_id = None
+            if selected_link != "연결 안 함":
+                linked_id = linkable[link_options.index(selected_link) - 1]["id"]
+
             # 버튼: 바로 등록 / 수정 후 등록
             btn_col1, btn_col2 = st.columns(2)
             with btn_col1:
@@ -541,14 +586,25 @@ elif page == "⬆️ 발주서 업로드":
                         "eta": parsed.get("eta") or None,
                         "currency": currency,
                         "items": save_items,
-                        "total_amount": total_amt,
+                        "total_amount": total_krw,
                         "status": "확인 대기",
                         "source_file": fname,
                         "notes": parsed.get("notes"),
+                        "doc_type": doc_type,
+                        "linked_id": linked_id,
                     }
                     order_id = save_order(order)
+                    # 상대 건에도 연결 설정
+                    if linked_id:
+                        linked_order = load_order(linked_id)
+                        if linked_order:
+                            linked_order["linked_id"] = order_id
+                            update_order(linked_id, linked_order)
                     results[file_key]["done"] = True
                     results[file_key]["order_id"] = order_id
+                    results[file_key]["doc_type"] = doc_type
+                    results[file_key]["item_count"] = len(items)
+                    results[file_key]["img_count"] = img_count
                     st.session_state["upload_results"] = results
                     st.rerun()
 
@@ -640,10 +696,21 @@ elif page == "⬆️ 발주서 업로드":
                         "status": "확인 대기",
                         "source_file": fname,
                         "notes": edit_notes if edit_notes else None,
+                        "doc_type": doc_type,
+                        "linked_id": linked_id,
                     }
                     order_id = save_order(order)
+                    if linked_id:
+                        linked_order = load_order(linked_id)
+                        if linked_order:
+                            linked_order["linked_id"] = order_id
+                            update_order(linked_id, linked_order)
+                    edit_img_count = sum(1 for it in new_items if it.get("image"))
                     results[file_key]["done"] = True
                     results[file_key]["order_id"] = order_id
+                    results[file_key]["doc_type"] = doc_type
+                    results[file_key]["item_count"] = len(new_items)
+                    results[file_key]["img_count"] = edit_img_count
                     st.session_state[f"expand_{file_key}"] = False
                     st.session_state["upload_results"] = results
                     st.rerun()
@@ -669,11 +736,13 @@ elif page == "📋 발주 목록":
         st.info("등록된 발주가 없습니다.")
         st.stop()
 
-    col_s, col_f = st.columns([2, 1])
+    col_s, col_f, col_t = st.columns([2, 1, 1])
     with col_s:
         search = st.text_input("검색", placeholder="발주번호, 거래처...", label_visibility="collapsed")
     with col_f:
         sfilter = st.selectbox("상태", ["전체", "확인 대기", "확인 완료", "배송 중", "입고 완료"])
+    with col_t:
+        tfilter = st.selectbox("유형", ["전체", "발주서", "인보이스"])
 
     filtered = orders
     if search:
@@ -681,6 +750,8 @@ elif page == "📋 발주 목록":
         filtered = [o for o in filtered if q in (o["id"] + o.get("supplier", "")).lower()]
     if sfilter != "전체":
         filtered = [o for o in filtered if o.get("status") == sfilter]
+    if tfilter != "전체":
+        filtered = [o for o in filtered if o.get("doc_type") == tfilter]
 
     st.caption(f"{len(filtered)}건")
 
@@ -689,10 +760,25 @@ elif page == "📋 발주 목록":
         status = o.get("status", "확인 대기")
         items = o.get("items", [])
         total_qty = sum(i.get("quantity", 0) for i in items)
+        o_doc_type = o.get("doc_type", "발주서")
+        dtype_icon = "📋" if o_doc_type == "발주서" else "📄"
+        linked_tag = ""
+        if o.get("linked_id"):
+            linked_tag = f"  ·  🔗 {o['linked_id']}"
 
-        header = f"{oid}  ·  **{o.get('supplier', '')}**  ·  {fmt_amount(o.get('total_amount'), o.get('currency'))}  ·  {status}"
+        header = f"{dtype_icon} {oid}  ·  **{o.get('supplier', '')}**  ·  {fmt_amount(o.get('total_amount'), o.get('currency'))}  ·  {status}{linked_tag}"
 
         with st.expander(header):
+
+            # ── 연결된 건 표시 ──
+            if o.get("linked_id"):
+                linked = load_order(o["linked_id"])
+                if linked:
+                    l_type = linked.get("doc_type", "발주서")
+                    l_icon = "📋" if l_type == "발주서" else "📄"
+                    l_items = linked.get("items", [])
+                    l_qty = sum(i.get("quantity", 0) for i in l_items)
+                    st.info(f"🔗 연결된 {l_type}: {l_icon} **{linked['id']}** · {linked.get('supplier', '')} · {len(l_items)}개 품목 · {l_qty:,}개")
 
             # ── 기본 정보 수정 ──
             st.markdown("**기본 정보**")
