@@ -271,11 +271,13 @@ if page == "📊 대시보드":
                     pass
 
         # 캘린더 HTML (단순 그리드만 — 깨지지 않도록)
-        weekdays = ["월", "화", "수", "목", "금", "토", "일"]
+        weekdays = ["일", "월", "화", "수", "목", "금", "토"]
         cal_html = '<div class="cal-grid">'
         for w in weekdays:
             cal_html += f'<div class="cal-header">{w}</div>'
-        for _ in range(first_weekday):
+        # 일요일 시작으로 변환 (monthrange는 월요일 기준이므로 +1)
+        sun_start = (first_weekday + 1) % 7
+        for _ in range(sun_start):
             cal_html += '<div class="cal-day empty"></div>'
         for day in range(1, num_days + 1):
             cls = "cal-day"
@@ -583,7 +585,7 @@ elif page == "⬆️ 발주서 업로드":
                     order = {
                         "supplier": parsed.get("supplier", ""),
                         "order_date": parsed.get("order_date"),
-                        "eta": parsed.get("eta") or None,
+                        "eta": parsed.get("eta") or ((parse_date(parsed.get("order_date")) or datetime.now().date()) + timedelta(days=7)).strftime("%Y-%m-%d"),
                         "currency": currency,
                         "items": save_items,
                         "total_amount": total_krw,
@@ -626,7 +628,8 @@ elif page == "⬆️ 발주서 업로드":
                     parsed["order_date"] = sel_od.strftime("%Y-%m-%d")
                 with ec3:
                     eta_val = parse_date(parsed.get("eta"))
-                    sel_eta = st.date_input("입고예정일", value=eta_val or None, key=f"eta_{file_key}")
+                    default_eta = eta_val or ((parse_date(parsed.get("order_date")) or datetime.now().date()) + timedelta(days=7))
+                    sel_eta = st.date_input("입고예정일", value=default_eta, key=f"eta_{file_key}")
                     parsed["eta"] = sel_eta.strftime("%Y-%m-%d") if sel_eta else None
                 with ec4:
                     currencies = ["KRW", "CNY", "USD", "JPY"]
@@ -689,7 +692,7 @@ elif page == "⬆️ 발주서 업로드":
                     order = {
                         "supplier": parsed["supplier"],
                         "order_date": parsed.get("order_date"),
-                        "eta": parsed.get("eta") or None,
+                        "eta": parsed.get("eta") or ((parse_date(parsed.get("order_date")) or datetime.now().date()) + timedelta(days=7)).strftime("%Y-%m-%d"),
                         "currency": save_cur,
                         "items": new_items,
                         "total_amount": sum(it["subtotal"] for it in new_items),
