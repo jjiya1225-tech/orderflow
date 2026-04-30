@@ -241,30 +241,26 @@ if page == "📊 대시보드":
         now = datetime.now()
 
         # ── 입고 캘린더 ──
-        st.subheader("📅 입고 캘린더")
-
         if "cal_month_offset" not in st.session_state:
             st.session_state["cal_month_offset"] = 0
 
-        nav_left, nav_center, nav_right = st.columns([1, 2, 1])
-        with nav_left:
-            if st.button("◀ 이전", key="cal_prev", use_container_width=True):
-                st.session_state["cal_month_offset"] -= 1
-                st.rerun()
-        with nav_right:
-            if st.button("다음 ▶", key="cal_next", use_container_width=True):
-                st.session_state["cal_month_offset"] += 1
-                st.rerun()
-
         month_offset = st.session_state["cal_month_offset"]
-        # 월 오프셋으로 정확한 연/월 계산
         total_months = now.year * 12 + (now.month - 1) + month_offset
         year = total_months // 12
         month = total_months % 12 + 1
-
-        with nav_center:
-            st.markdown(f"<h3 style='text-align:center; margin:0;'>{year}년 {month}월</h3>", unsafe_allow_html=True)
         first_weekday, num_days = monthrange(year, month)
+
+        nav_l, nav_c, nav_r = st.columns([1, 3, 1])
+        with nav_l:
+            if st.button("◀", key="cal_prev", use_container_width=True):
+                st.session_state["cal_month_offset"] -= 1
+                st.rerun()
+        with nav_c:
+            st.markdown(f"<h2 style='text-align:center; margin:0; padding:4px 0;'>{year}년 {month}월</h2>", unsafe_allow_html=True)
+        with nav_r:
+            if st.button("▶", key="cal_next", use_container_width=True):
+                st.session_state["cal_month_offset"] += 1
+                st.rerun()
 
         # 해당 월 입고 예정 수집
         eta_map = {}
