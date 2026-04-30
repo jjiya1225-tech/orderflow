@@ -160,6 +160,10 @@ def round_price(v, unit=None):
 
 def calc_prices(unit_price, currency):
     """외화 단가 → 원단가, 업체가, 온라인가 자동 계산"""
+    try:
+        unit_price = float(unit_price or 0)
+    except (TypeError, ValueError):
+        unit_price = 0
     rate = get_rates().get(currency, 1)
     krw = round_price(unit_price * rate)
     vendor = round_price(krw * get_vendor_multi())
@@ -170,7 +174,11 @@ def calc_prices(unit_price, currency):
 def add_calc_prices(items, currency):
     """items 리스트에 원단가/업체가/온라인가 필드 추가"""
     for it in items:
-        price = it.get("unit_price", 0)
+        raw_price = it.get("unit_price", 0)
+        try:
+            price = float(raw_price or 0)
+        except (TypeError, ValueError):
+            price = 0
         krw, vendor, online = calc_prices(price, currency)
         it["krw_price"] = krw
         it["vendor_price"] = vendor
