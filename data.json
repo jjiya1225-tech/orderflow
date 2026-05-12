@@ -92,6 +92,142 @@
       "linked_id": null,
       "id": "PO-2026-0512-001",
       "created_at": "2026-05-12T23:04:56.500827"
+    },
+    {
+      "supplier": "YIWU XINHOU E-COMMERCE FIRM",
+      "order_date": "2026-05-08",
+      "eta": "2026-05-15",
+      "currency": "CNY",
+      "items": [
+        {
+          "name": "2INCH DOWN LIGHT 8W 4000K OSRAM K9-55/36V/NICKEL",
+          "color": null,
+          "quantity": 50,
+          "unit_price": 5.07,
+          "subtotal": 253.5,
+          "krw_price": 1100,
+          "vendor_price": 2200,
+          "online_price": 3300
+        },
+        {
+          "name": "2INCH DOWN LIGHT 8W 3500K K7-55/72V(LENZ)",
+          "color": null,
+          "quantity": 1000,
+          "unit_price": 2.9,
+          "subtotal": 2900,
+          "krw_price": 600,
+          "vendor_price": 1200,
+          "online_price": 1800
+        },
+        {
+          "name": "2INCH DOWN LIGHT 7W 4000K K1-55(OSRAM LED)",
+          "color": null,
+          "quantity": 1000,
+          "unit_price": 3.91,
+          "subtotal": 3910,
+          "krw_price": 900,
+          "vendor_price": 1800,
+          "online_price": 2700
+        },
+        {
+          "name": "2INCH DOWN LIGHT 7W 3500K K1-55(OSRAM LED)",
+          "color": null,
+          "quantity": 1500,
+          "unit_price": 3.91,
+          "subtotal": 5865,
+          "krw_price": 900,
+          "vendor_price": 1800,
+          "online_price": 2700
+        },
+        {
+          "name": "2INCH DOWN LIGHT 7W 3000K K1-55(OSRAM LED)",
+          "color": null,
+          "quantity": 1500,
+          "unit_price": 3.91,
+          "subtotal": 5865,
+          "krw_price": 900,
+          "vendor_price": 1800,
+          "online_price": 2700
+        },
+        {
+          "name": "2INCH DOWN LIGHT 8W 4000K UMP-55/72V",
+          "color": null,
+          "quantity": 3000,
+          "unit_price": 2.46,
+          "subtotal": 7380,
+          "krw_price": 500,
+          "vendor_price": 1000,
+          "online_price": 1500
+        },
+        {
+          "name": "3INCH DOWN LIGHT 12W 4000K UMP-75/72V",
+          "color": null,
+          "quantity": 1000,
+          "unit_price": 2.75,
+          "subtotal": 2750,
+          "krw_price": 600,
+          "vendor_price": 1200,
+          "online_price": 1800
+        },
+        {
+          "name": "3INCH DOWN LIGHT 12W 3000K UMP-75/72V",
+          "color": null,
+          "quantity": 500,
+          "unit_price": 2.75,
+          "subtotal": 1375,
+          "krw_price": 600,
+          "vendor_price": 1200,
+          "online_price": 1800
+        },
+        {
+          "name": "1.5INCH DOWN LIGHT 7W 4000K K1.5-35（OSRAM LED) A",
+          "color": null,
+          "quantity": 1000,
+          "unit_price": 3.77,
+          "subtotal": 3770,
+          "krw_price": 800,
+          "vendor_price": 1600,
+          "online_price": 2400
+        },
+        {
+          "name": "12V 100W SMPS",
+          "color": null,
+          "quantity": 100,
+          "unit_price": 18.7,
+          "subtotal": 1870,
+          "krw_price": 4100,
+          "vendor_price": 8200,
+          "online_price": 12300
+        },
+        {
+          "name": "24V 100W SMPS",
+          "color": null,
+          "quantity": 300,
+          "unit_price": 18.7,
+          "subtotal": 5610,
+          "krw_price": 4100,
+          "vendor_price": 8200,
+          "online_price": 12300
+        },
+        {
+          "name": "DC WIRE",
+          "color": null,
+          "quantity": 500,
+          "unit_price": 0.94,
+          "subtotal": 470,
+          "krw_price": 200,
+          "vendor_price": 400,
+          "online_price": 600
+        }
+      ],
+      "total_amount": 9195000,
+      "status": "확인 대기",
+      "source_file": "INVOICE 05월08일 출고건.xlsx",
+      "notes": null,
+      "doc_type": "인보이스",
+      "linked_id": null,
+      "id": "PO-2026-0512-002",
+      "created_at": "2026-05-12T23:05:55.243276"
     }
   ]
 }
